@@ -1,4 +1,5 @@
 streamlit
 numpy
-fpdf
+fpdf2
+uharfbuzz
 matplotlib

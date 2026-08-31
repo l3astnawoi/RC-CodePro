@@ -62,6 +62,10 @@ REBAR = {
     for d in _REBAR_DIAMETERS_MM
 }
 
+# Plain round bars (RB) — common in Thailand for stirrups / temperature steel
+REBAR["RB6"] = {"diameter": 6.0, "area": 28.27}
+REBAR["RB9"] = {"diameter": 9.0, "area": 63.62}
+
 # Convenience: designation -> nominal area (mm^2)
 REBAR_AREAS = {name: props["area"] for name, props in REBAR.items()}
 
@@ -189,10 +193,12 @@ phi = {
     "compression_spiral": PHI_COMPRESSION_CONTROLLED_SPIRAL,  # 0.75
 }
 
-# 2. Standard metric deformed bars -> nominal area (mm^2)
+# 2. Standard bar menu -> nominal area (mm^2).  Round bars RB6 / RB9 first
+#    (stirrups / temperature steel), then the deformed-bar range.
 rebars = {
     name: REBAR[name]["area"]
-    for name in ("DB12", "DB16", "DB20", "DB25", "DB28", "DB32")
+    for name in ("RB6", "RB9",
+                 "DB12", "DB16", "DB20", "DB25", "DB28", "DB32")
 }
 
 
