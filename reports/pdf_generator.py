@@ -366,7 +366,8 @@ def _image_section(pdf, buf, title="รายละเอียดหน้า�
 #                params=[(label, value[, unit]), ...],
 #                checks=[(name, demand, capacity, ok), ...],
 #                figures=Figure | BytesIO | [Figure | (caption, Figure), ...],
-#                status=bool|"PASS"|"FAIL", summary=str) -> bytes
+#                status=bool|"PASS"|"FAIL", summary=str,
+#                boq_dataframe=DataFrame | [rows]) -> bytes
 # Any structural module (Beam / Column / Slab / Footing) can call this with
 # its own dictionaries — no per-element PDF formatting code.
 # ---------------------------------------------------------------------------
@@ -439,13 +440,89 @@ def _checks_table(pdf, checks):
     return all_ok
 
 
+_BOQ_LABEL_W = 62.0
+
+
+def _boq_num(v):
+    """Neat numeric cell: thousands-separated, trailing zeros trimmed."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return str(v)
+    if v != v:                                   # NaN
+        return "-"
+    if abs(v - round(v)) < 1e-9:
+        return f"{v:,.0f}"
+    return f"{v:,.2f}".rstrip("0").rstrip(".")
+
+
+def _boq_rows(df):
+    """Normalise a Pandas DataFrame / list-of-dicts / list-of-lists into
+    ``(column_names, [row_values, ...])``."""
+    if df is None:
+        return [], []
+    if hasattr(df, "columns") and hasattr(df, "iterrows"):       # DataFrame
+        cols = [str(c) for c in df.columns]
+        rows = [[r[c] for c in df.columns] for _, r in df.iterrows()]
+        return cols, rows
+    seq = list(df)
+    if not seq:
+        return [], []
+    if isinstance(seq[0], dict):
+        cols = list(seq[0].keys())
+        return cols, [[d.get(c) for c in cols] for d in seq]
+    return [str(c) for c in seq[0]], [list(r) for r in seq[1:]]
+
+
+def _boq_table(pdf, df):
+    """Section 4 body — render the BOQ summary DataFrame as a PDF table.
+
+    First column is a left-aligned work-category label; the rest are
+    right-aligned numeric columns.  The final row (Grand Total) is shaded
+    and bold.
+    """
+    cols, rows = _boq_rows(df)
+    if not cols or not rows:
+        return
+
+    avail = pdf.w - pdf.l_margin - pdf.r_margin
+    w0 = min(_BOQ_LABEL_W, avail * 0.40)
+    wn = (avail - w0) / max(len(cols) - 1, 1)
+    widths = [w0] + [wn] * (len(cols) - 1)
+    last = len(cols) - 1
+
+    pdf.set_font(_FONT, "B", SZ_ROW)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_fill_color(238, 240, 244)
+    for k, (w, name) in enumerate(zip(widths, cols)):
+        kw = dict(new_x=XPos.LMARGIN, new_y=YPos.NEXT) if k == last else {}
+        pdf.cell(w, LH_ROW, _t(f" {name}"), fill=True,
+                 align="L" if k == 0 else "R", **kw)
+
+    for ri, row in enumerate(rows):
+        is_total = ri == len(rows) - 1
+        y0 = pdf.get_y()
+        pdf.set_font(_FONT, "B" if is_total else "", SZ_ROW)
+        pdf.set_text_color(0, 0, 0) if is_total else pdf.set_text_color(45, 45, 45)
+        pdf.set_fill_color(245, 247, 250)
+        for k, (w, val) in enumerate(zip(widths, row)):
+            kw = dict(new_x=XPos.LMARGIN, new_y=YPos.NEXT) if k == last else {}
+            txt = f"  {val}" if k == 0 else f"{_boq_num(val)}  "
+            pdf.cell(w, LH_ROW, _t(txt), fill=is_total,
+                     align="L" if k == 0 else "R", **kw)
+        pdf.set_draw_color(226, 226, 226)
+        pdf.set_line_width(0.15)
+        pdf.line(pdf.l_margin, y0 + LH_ROW, pdf.w - pdf.r_margin, y0 + LH_ROW)
+    pdf.set_text_color(0, 0, 0)
+
+
 def build_report(*, title, project_name="", engineer="", location="-",
                  params=None, checks=None, figures=None,
-                 status=None, summary=None):
+                 status=None, summary=None, boq_dataframe=None):
     """Assemble a generic A4 RC calculation report and return PDF bytes.
 
     See the module-level comment for the argument shapes.  ``status`` defaults
-    to the AND of every ``checks`` row when omitted.
+    to the AND of every ``checks`` row when omitted.  ``boq_dataframe`` (a
+    Pandas DataFrame or list-of-rows) adds a "BOQ Estimate" table as a final
+    section.
     """
     info = {
         "project_name": str(project_name or "-"),
@@ -484,6 +561,13 @@ def build_report(*, title, project_name="", engineer="", location="-",
         buf = _fig_to_buf(obj)
         if buf is not None:
             _image_section(pdf, buf, title=caption)
+
+    # -- Section 4 : BOQ estimate --------------------------------------
+    if boq_dataframe is not None:
+        if pdf.get_y() + 62.0 > pdf.page_break_trigger:
+            pdf.add_page()
+        _section(pdf, "สรุปปริมาณวัสดุโครงสร้าง (BOQ Estimate)")
+        _boq_table(pdf, boq_dataframe)
 
     # -- Verdict ---------------------------------------------------------
     if status is None:

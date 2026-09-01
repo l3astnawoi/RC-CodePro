@@ -13,13 +13,14 @@ CODE_REFERENCE = "ACI 318M-08"
 
 # Sidebar labels (Thai) -> renderer key
 HOME = "หน้าหลัก"
+BUILDING = "🏢 จำลองอาคาร (Building Model)"
 BEAM = "คาน"
 COLUMN = "เสา"
 SLAB = "พื้น"
 FOOTING = "ฐานราก"
 STAIR = "บันได"
 
-MENU_ITEMS = [HOME, BEAM, COLUMN, SLAB, FOOTING, STAIR]
+MENU_ITEMS = [HOME, BUILDING, BEAM, COLUMN, SLAB, FOOTING, STAIR]
 
 
 def show_welcome():
@@ -35,6 +36,7 @@ def show_welcome():
 
         เลือกชิ้นส่วนโครงสร้างที่ต้องการออกแบบจากเมนูด้านซ้าย:
 
+        - **🏢 จำลองอาคาร (Building Model)** &mdash; กำหนดระบบเส้นกริดและตำแหน่งเสา
         - **คาน** &mdash; การดัด แรงเฉือน และการจัดเหล็กเสริมของคาน คสล.
         - **เสา** &mdash; การตรวจสอบกำลังรับแรงตามแนวแกน
         - **พื้น** &mdash; การออกแบบพื้นทางเดียว
@@ -63,6 +65,9 @@ def main():
 
     if choice == HOME:
         show_welcome()
+    elif choice == BUILDING:
+        from modules.building import render_building_model
+        render_building_model()
     elif choice == BEAM:
         from modules.beam import render_beam_module
         render_beam_module()

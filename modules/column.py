@@ -12,11 +12,12 @@ UI units: cm / ksc / kN ; converted to mm / MPa / N internally.
 
 import math
 
+import numpy as np
 import streamlit as st
 
 from utils.aci_318m import get_beta1, rebars, bar_area
 from utils.drawing import (draw_column_pm_and_section, draw_column_detail,
-                           fig_to_png_buf)
+                           draw_pm_diagram, fig_to_png_buf)
 from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_column_report,
@@ -194,6 +195,136 @@ def _Pn_at_ecc(nom, e):
 # ===========================================================================
 
 
+ES_KSC = 2040000.0            # steel modulus in ksc (~= 200,000 MPa)
+EPS_CU_COL = 0.003           # ultimate concrete strain
+
+
+def _beta1_col_ksc(fc_ksc):
+    """beta1 stress-block factor, ACI 318M-08 10.2.7.3, MKS form."""
+    if fc_ksc <= 280.0:
+        return 0.85
+    return max(0.65, 0.85 - 0.05 * (fc_ksc - 280.0) / 70.0)
+
+
+def _col_bar_xy(shape, b, h, D, cov, tie_dia, main_dia, n):
+    """Main-bar centre coordinates (cm, section-centre origin), matching the
+    layout used by ``draw_column_detail``."""
+    n = max(int(n), 4)
+    if shape == "circ":
+        Rb = D / 2.0 - cov - tie_dia - main_dia / 2.0
+        return [(Rb * math.cos(math.pi / 2.0 - 2.0 * math.pi * k / n),
+                 Rb * math.sin(math.pi / 2.0 - 2.0 * math.pi * k / n))
+                for k in range(n)]
+    x0 = -b / 2.0 + cov + tie_dia + main_dia / 2.0
+    y0 = -h / 2.0 + cov + tie_dia + main_dia / 2.0
+    x1, y1 = -x0, -y0
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    seg = [x1 - x0, y1 - y0, x1 - x0, y1 - y0]
+    per = sum(seg) or 1.0
+    out = []
+    for i in range(n):
+        dwalk = per * i / n
+        for sidx in range(4):
+            if dwalk <= seg[sidx] or sidx == 3:
+                (ax, ay), (bx, by) = corners[sidx], corners[(sidx + 1) % 4]
+                tt = (dwalk / seg[sidx]) if seg[sidx] else 0.0
+                out.append((ax + (bx - ax) * tt, ay + (by - ay) * tt))
+                break
+            dwalk -= seg[sidx]
+    return out
+
+
+def _whitney_area_centroid(shape, a, b, D, H):
+    """Whitney compression-block area (cm2) and its centroid distance above
+    the section centre (cm) for a block depth ``a`` from the extreme
+    compression fibre (the +y face)."""
+    if shape == "circ":
+        r = D / 2.0
+        a = min(max(a, 0.0), 2.0 * r)
+        if a <= 0.0:
+            return 0.0, 0.0
+        if a >= 2.0 * r:
+            return math.pi * r * r, 0.0
+        al = math.acos(max(-1.0, min(1.0, (r - a) / r)))
+        denom = al - math.sin(al) * math.cos(al)
+        area = r * r * denom
+        ybar = ((2.0 * r * math.sin(al) ** 3) / (3.0 * denom)
+                if denom > 1.0e-9 else r - a / 2.0)
+        return area, ybar
+    a = min(max(a, 0.0), H)
+    return b * a, H / 2.0 - a / 2.0
+
+
+def _calculate_pm_curve(*, shape, b, h, D, fc, fy, bars, Ab, spiral,
+                        n_pts=44):
+    """Strain-compatibility P-M interaction curve, MKS (ksc / cm / kgf).
+
+    bars : [(x_cm, y_cm), ...] from the section centre, +y toward the
+           extreme compression fibre.  Ab : one main-bar area (cm2).
+    Returns (Mn, Pn, phiMn, phiPn) — numpy arrays, kgf-m and kgf, ordered
+    from pure compression to pure tension (a closed polygon on M = 0).
+    """
+    H = D if shape == "circ" else h
+    Ag = (math.pi * D * D / 4.0) if shape == "circ" else b * h
+    Ast = len(bars) * Ab
+    beta1 = _beta1_col_ksc(fc)
+    ys = np.array([p[1] for p in bars], dtype=float)
+    d_i = H / 2.0 - ys                                 # depth from comp. face
+    d_max = float(d_i.max())                           # extreme tension layer
+    eps_y = fy / ES_KSC
+    phi0 = 0.75 if spiral else 0.65
+    alpha = 0.85 if spiral else 0.80
+
+    Mn_l, Pn_l, pMn_l, pPn_l = [], [], [], []
+    for c in np.linspace(1.5 * H, 0.001 * H, int(n_pts)):
+        a = min(beta1 * c, H)
+        Acc, y_cc = _whitney_area_centroid(shape, a, b, D, H)
+        Cc = 0.85 * fc * Acc                           # kgf, compression +ve
+        eps_s = EPS_CU_COL * (c - d_i) / c
+        fs = np.clip(eps_s * ES_KSC, -fy, fy)          # ksc
+        in_block = d_i <= a
+        fs = np.where((fs > 0.0) & in_block, fs - 0.85 * fc, fs)
+        Fs = Ab * fs                                   # kgf per bar
+        Pn = Cc + float(Fs.sum())                      # kgf
+        Mn = (Cc * y_cc + float((Fs * ys).sum())) / 100.0   # kgf-m, about centre
+        eps_t = EPS_CU_COL * (d_max - c) / c           # +ve = tension
+        if eps_t <= eps_y:
+            ph = phi0
+        elif eps_t >= 0.005:
+            ph = 0.90
+        else:
+            ph = phi0 + (0.90 - phi0) * (eps_t - eps_y) / (0.005 - eps_y)
+        Mn_l.append(abs(Mn))
+        Pn_l.append(Pn)
+        pMn_l.append(ph * abs(Mn))
+        pPn_l.append(ph * Pn)
+
+    Po = 0.85 * fc * (Ag - Ast) + fy * Ast             # kgf, pure compression
+    Pt = -fy * Ast                                     # kgf, pure tension
+    cap = alpha * phi0 * Po                            # ACI 10.3.6 design cap
+
+    Mn = np.concatenate(([0.0], Mn_l, [0.0]))
+    Pn = np.concatenate(([Po], np.minimum(Pn_l, Po), [Pt]))
+    phiMn = np.concatenate(([0.0], pMn_l, [0.0]))
+    phiPn = np.concatenate(([cap], np.minimum(pPn_l, cap), [0.90 * Pt]))
+    return Mn, Pn, phiMn, phiPn
+
+
+def _point_in_poly(px, py, xs, ys):
+    """Even-odd ray-casting point-in-polygon test."""
+    n = len(xs)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        yi, yj = ys[i], ys[j]
+        if ((yi > py) != (yj > py)):
+            xint = (xs[j] - xs[i]) * (py - yi) / ((yj - yi) or 1.0e-12) + xs[i]
+            if px < xint:
+                inside = not inside
+        j = i
+    return inside
+
+
 def _render_column():
     st.title("การออกแบบเสา (Column — แรงตามแนวแกน + รายละเอียด)")
     st.caption("ตรวจสอบอัตราส่วนเหล็กเสริม ρg, กำลังรับแรงตามแนวแกน φPn,max และ "
@@ -202,6 +333,27 @@ def _render_column():
 
     shape = st.selectbox("ประเภทเสา (Column Type)", COL_SHAPES, key="cd_shape")
     circular = shape.startswith("Circular")
+
+    # -- optional: pull a governing Pu from the Building Model takedown --
+    _groups = st.session_state.get("column_design_groups") or {}
+    if _groups:
+        with st.expander("📥 ดึงแรงจากโมเดลอาคาร (Import Pu from Building Model)",
+                         expanded=False):
+            g1, g2 = st.columns([2, 1])
+            with g1:
+                _mark = st.selectbox("เลือกเบอร์เสา (Column Mark)",
+                                     list(_groups.keys()), key="cd_import_mark")
+            with g2:
+                st.write("")
+                if st.button("เติมค่า Pu อัตโนมัติ", key="cd_import_btn"):
+                    st.session_state["cd_Pu"] = float(
+                        _groups[_mark]["Pu_kgf"])
+                    st.rerun()
+            _gi = _groups.get(_mark, {})
+            st.caption(
+                f"เบอร์ {_mark}: เสาควบคุม {_gi.get('governing_grid', '-')} · "
+                f"Pu = {_gi.get('Pu_kgf', 0):,.0f} kgf"
+            )
 
     # ------------------------------------------------------------------
     # 1. Section & Material
@@ -248,8 +400,9 @@ def _render_column():
     with st.expander("แรงกระทำ (Loads)", expanded=True):
         l1, l2 = st.columns(2)
         with l1:
+            _pu_kw = {} if "cd_Pu" in st.session_state else {"value": 180000.0}
             Pu = st.number_input("แรงตามแนวแกนประลัย Pu (kgf)", min_value=0.0,
-                                 value=180000.0, step=1000.0, key="cd_Pu")
+                                 step=1000.0, key="cd_Pu", **_pu_kw)
         with l2:
             Mu = st.number_input(
                 "โมเมนต์ดัดประลัย Mu (kgf-m)", min_value=0.0, value=6000.0,
@@ -341,7 +494,22 @@ def _render_column():
         spacing_note = (f"s_max = min(16·db = {s1v:,.1f}, 48·d_tie = {s2v:,.1f}, "
                         f"ด้านแคบ = {s3v:,.1f}) cm")
 
-    passed = ratio_ok and axial_ok and spacing_ok
+    # ------------------------------------------------------------------
+    # Check 4 — full P-M interaction (strain-compatibility, ACI 318M-08)
+    # ------------------------------------------------------------------
+    _shape_key = "circ" if circular else "rect"
+    bars_xy = _col_bar_xy(_shape_key, b, h, D, cov, tie_dia, main_dia, n_bars)
+    Mn_c, Pn_c, phiMn_c, phiPn_c = _calculate_pm_curve(
+        shape=_shape_key, b=b, h=h, D=D, fc=fc, fy=fy, bars=bars_xy, Ab=Ab,
+        spiral=circular)
+    pm_ok = _point_in_poly(Mu, Pu, phiMn_c, phiPn_c)
+    # nearest design capacity at the demand axial level (for the readout)
+    _pP = np.asarray(phiPn_c)
+    _msk = np.abs(_pP - Pu) <= (0.06 * max(abs(_pP).max(), 1.0))
+    phiMn_at_Pu = float(np.asarray(phiMn_c)[_msk].max()) if _msk.any() else \
+        float(np.interp(Pu, _pP[::-1], np.asarray(phiMn_c)[::-1]))
+
+    passed = ratio_ok and axial_ok and spacing_ok and pm_ok
 
     # ------------------------------------------------------------------
     # Calculation breakdown
@@ -361,19 +529,19 @@ def _render_column():
 | กำลังตามแนวแกนล้วน Po = 0.85·f'c·(Ag−Ast) + fy·Ast | {Po:,.0f} kgf |
 | ตัวคูณ (α · φ) — {"เกลียว" if circular else "ปลอก"} | {alpha:.2f} · {phi_c:.2f} |
 | ขีดจำกัดออกแบบ φPn,max = α·φ·Po | **{phiPn_max:,.0f} kgf** |
-| แรงตามแนวแกนประลัย Pu | {Pu:,.0f} kgf |
+| แรงประลัยที่กระทำ (Pu , Mu) | {Pu:,.0f} kgf , {Mu:,.0f} kgf-m |
+| กำลังโมเมนต์ออกแบบที่ระดับ Pu (φMn) | **≈ {phiMn_at_Pu:,.0f} kgf-m** |
+| จุด (Mu, Pu) อยู่ภายในเส้นออกแบบ P-M | {"ใช่ (ปลอดภัย)" if pm_ok else "ไม่ (เกินกำลัง)"} |
 | ระยะเรียง{"เหล็กเกลียว (พิตช์)" if circular else "เหล็กปลอก"} ที่แนะนำ S | **≤ {S_req:,.1f} cm** |
 | เกณฑ์ระยะเรียง | {spacing_note} |
 """
     )
-    st.caption("หมายเหตุ: โมเมนต์ Mu ยังไม่ถูกนำมาคิดในรุ่นนี้ "
-               "(เตรียมไว้สำหรับแผนภาพปฏิสัมพันธ์ P-M)")
 
     # ------------------------------------------------------------------
     # Result cards
     # ------------------------------------------------------------------
     st.subheader("ผลการตรวจสอบ")
-    c_ratio, c_axial, c_tie = st.columns(3)
+    c_ratio, c_axial, c_pm, c_tie = st.columns(4)
     with c_ratio:
         st.markdown("#### อัตราส่วนเหล็ก ρg")
         st.metric("ρg (1–8%)", f"{rho_g * 100.0:,.2f} %")
@@ -388,6 +556,12 @@ def _render_column():
                   delta=f"{phiPn_max - Pu:,.0f}")
         (st.success if axial_ok else st.error)(
             (PASS_TXT if axial_ok else FAIL_TXT) + " — φPn,max ≥ Pu")
+    with c_pm:
+        st.markdown("#### ปฏิสัมพันธ์ P-M")
+        st.metric("φMn @ Pu / Mu (kgf-m)",
+                  f"{phiMn_at_Pu:,.0f} / {Mu:,.0f}")
+        (st.success if pm_ok else st.error)(
+            (PASS_TXT if pm_ok else FAIL_TXT) + " — (Mu, Pu) ในเส้นออกแบบ")
     with c_tie:
         st.markdown("#### ระยะเรียง" + ("เหล็กเกลียว" if circular else "เหล็กปลอก"))
         st.metric("S ที่แนะนำ (cm)", f"≤ {S_req:,.1f}")
@@ -414,15 +588,30 @@ def _render_column():
         st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
 
     # ------------------------------------------------------------------
+    # P-M interaction diagram
+    # ------------------------------------------------------------------
+    pm_img = None
+    try:
+        pm_fig = draw_pm_diagram(Mn_c, Pn_c, phiMn_c, phiPn_c, Mu, Pu)
+        st.pyplot(pm_fig, use_container_width=True)
+        st.caption("แผนภาพปฏิสัมพันธ์ P-M (P-M Interaction Diagram)")
+        pm_img = fig_to_png_buf(pm_fig)
+    except Exception as exc:  # pragma: no cover
+        st.warning(f"ไม่สามารถสร้างแผนภาพ P-M ได้: {exc}")
+
+    # ------------------------------------------------------------------
     # Overall verdict
     # ------------------------------------------------------------------
     st.subheader("ผลการตรวจสอบรวม")
     if passed:
-        st.success(f"{PASS_TXT} — ρg, φPn,max ≥ Pu และระยะเรียงเหล็กขวางผ่านเกณฑ์")
+        st.success(f"{PASS_TXT} — ρg, ปฏิสัมพันธ์ P-M, φPn,max ≥ Pu และ"
+                   f"ระยะเรียงเหล็กขวางผ่านเกณฑ์")
     else:
         fails = []
         if not ratio_ok:
             fails.append(f"ρg = {rho_g * 100:,.2f}% นอกช่วง 1–8%")
+        if not pm_ok:
+            fails.append("จุด (Mu, Pu) อยู่นอกเส้นออกแบบ P-M (เกินกำลัง)")
         if not axial_ok:
             fails.append(f"Pu = {Pu:,.0f} > φPn,max = {phiPn_max:,.0f} kgf")
         if not spacing_ok:
@@ -443,13 +632,15 @@ def _render_column():
             ("เหล็กเสริมหลัก", f"{n_bars} - {main_size}"),
             (("เหล็กเกลียว" if circular else "เหล็กปลอก"), stir_size),
             ("แรงตามแนวแกน Pu", Pu, "kgf", 0),
-            ("โมเมนต์ Mu (ยังไม่คิด)", Mu, "kgf-m", 0),
+            ("โมเมนต์ดัด Mu", Mu, "kgf-m", 0),
             ("พื้นที่หน้าตัดรวม Ag", Ag, "cm²", 1),
             ("พื้นที่เหล็กเสริม Ast", Ast, "cm²", 2),
         ],
         checks=[
             ("อัตราส่วนเหล็ก ρg (1–8%)", f"{rho_g * 100:,.2f} %",
              "1.00 – 8.00 %", ratio_ok),
+            ("ปฏิสัมพันธ์ P-M — (Mu, Pu) ในเส้นออกแบบ",
+             f"Mu = {Mu:,.0f} kgf-m", f"φMn ≈ {phiMn_at_Pu:,.0f} kgf-m", pm_ok),
             ("กำลังตามแนวแกน (φPn,max ≥ Pu)", f"{Pu:,.0f} kgf",
              f"{phiPn_max:,.0f} kgf", axial_ok),
             (("ระยะพิตช์เหล็กเกลียว" if circular else "ระยะเรียงเหล็กปลอก"),
@@ -457,10 +648,14 @@ def _render_column():
              f"{'พิตช์ 2.5–7.5 cm' if circular else f'≤ {least_dim:,.0f} cm'}",
              spacing_ok),
         ],
-        figures=[("รายละเอียดหน้าตัดเสา (Column Cross-Section)", section_img)],
+        figures=[
+            ("รายละเอียดหน้าตัดเสา (Column Cross-Section)", section_img),
+            ("แผนภาพปฏิสัมพันธ์ P-M (P-M Interaction Diagram)", pm_img),
+        ],
         status=passed,
-        summary=("ρg, φPn,max ≥ Pu และระยะเรียงเหล็กขวางผ่านเกณฑ์ ACI 318M-08"
-                 if passed else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
+        summary=("ρg, ปฏิสัมพันธ์ P-M, φPn,max ≥ Pu และระยะเรียงเหล็กขวางผ่าน"
+                 "เกณฑ์ ACI 318M-08" if passed
+                 else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 if __name__ == "__main__":

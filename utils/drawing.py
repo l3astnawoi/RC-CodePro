@@ -722,6 +722,190 @@ def draw_slab_plan(Lx_m, Ly_m, *, main_label="Main", main_sp_cm=15.0,
 
 
 # ===========================================================================
+# Building modeler — structural grid plan
+# ===========================================================================
+def _bubble_letter(i):
+    """0 -> 'A', 1 -> 'B', ... 25 -> 'Z', 26 -> 'AA' ..."""
+    s = ""
+    i += 1
+    while i > 0:
+        i, rem = divmod(i - 1, 26)
+        s = chr(65 + rem) + s
+    return s
+
+
+def draw_grid_plan(x_coords, y_coords, *, marker="square",
+                   active_columns=None, void_panels=None, column_loads=None):
+    """Structural grid plan view.
+
+    Dashed vertical/horizontal grid lines, a column marker (square or
+    circle) at every *active* intersection, lettered grid bubbles along the
+    top and numbered bubbles down the left, dimension chains for the
+    spacings, translucent slab panels and a diagonal-cross symbol for every
+    void panel.  Equal aspect ratio.  Returns a Matplotlib ``Figure``.
+
+    ``active_columns`` — iterable of ``(x, y)`` coords to draw a column at
+    (``None`` = every intersection).
+    ``void_panels`` — iterable of ``(i, j)`` panel indices, where panel
+    ``(i, j)`` spans ``x[i]..x[i+1]`` and ``y[j]..y[j+1]``.
+    ``column_loads`` — optional mapping of ``(x, y)`` node coord (or grid
+    label) to a factored axial load in kgf (or a dict carrying
+    ``"Pu_kgf"``).  When given, each active column is annotated with its
+    load in tonnes, e.g. ``"12.5 t"``.
+    """
+    xs = [float(v) for v in x_coords] or [0.0]
+    ys = [float(v) for v in y_coords] or [0.0]
+    x0, x1 = xs[0], xs[-1]
+    y0, y1 = ys[0], ys[-1]
+    span = max(x1 - x0, y1 - y0, 1.0)
+    ext = 0.11 * span
+    circ = str(marker).lower().startswith("c")
+    _COL = "#1f5fd0"
+
+    if active_columns is None:
+        active = {(round(gx, 3), round(gy, 3)) for gy in ys for gx in xs}
+    else:
+        active = {(round(float(px), 3), round(float(py), 3))
+                  for px, py in active_columns}
+    voids = {(int(i), int(j)) for i, j in (void_panels or [])}
+
+    loads = dict(column_loads or {})
+
+    def _pu_kgf(gx, gy):
+        if not loads:
+            return None
+        for key in ((round(gx, 3), round(gy, 3)), (gx, gy)):
+            if key in loads:
+                v = loads[key]
+                return v.get("Pu_kgf") if isinstance(v, dict) else float(v)
+        return None
+
+    fig, ax = plt.subplots(figsize=(8.4, 8.4))
+
+    # ---- slab panels (fill) / voids (diagonal cross) ------------------
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            px0, px1, py0, py1 = xs[i], xs[i + 1], ys[j], ys[j + 1]
+            if (i, j) in voids:
+                ax.add_patch(patches.Rectangle(
+                    (px0, py0), px1 - px0, py1 - py0, facecolor="none",
+                    edgecolor="#9aa0a6", linewidth=1.0, zorder=1))
+                ax.plot([px0, px1], [py0, py1], color="#9aa0a6",
+                        linewidth=1.0, zorder=1)
+                ax.plot([px0, px1], [py1, py0], color="#9aa0a6",
+                        linewidth=1.0, zorder=1)
+            else:
+                ax.add_patch(patches.Rectangle(
+                    (px0, py0), px1 - px0, py1 - py0, facecolor="#8fb3d9",
+                    edgecolor="none", alpha=0.20, zorder=1))
+
+    for gx in xs:
+        ax.plot([gx, gx], [y0 - 0.05 * span, y1 + ext],
+                color="#7c7c7c", linewidth=0.9, linestyle=(0, (6, 4)),
+                zorder=2)
+    for gy in ys:
+        ax.plot([x0 - ext, x1 + 0.05 * span], [gy, gy],
+                color="#7c7c7c", linewidth=0.9, linestyle=(0, (6, 4)),
+                zorder=2)
+
+    r = max(0.032 * span, 0.05)
+    off = max(0.045 * span, 0.2)
+    for gy in ys:
+        for gx in xs:
+            if (round(gx, 3), round(gy, 3)) not in active:
+                continue
+            if circ:
+                ax.add_patch(patches.Circle((gx, gy), r, facecolor=_COL,
+                                            edgecolor=_CONC_EDGE,
+                                            linewidth=1.0, zorder=5))
+            else:
+                ax.add_patch(patches.Rectangle(
+                    (gx - r, gy - r), 2.0 * r, 2.0 * r, facecolor=_COL,
+                    edgecolor=_CONC_EDGE, linewidth=1.0, zorder=5))
+            pu = _pu_kgf(gx, gy)
+            if pu is not None:
+                ax.text(gx + off, gy + off, f"{pu / 1000.0:.1f} t",
+                        ha="left", va="bottom", fontsize=_DIM_FS - 2.0,
+                        fontweight="bold", color="#b3261e", zorder=8,
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white",
+                                  ec="none", alpha=0.75))
+
+    br = 0.055 * span
+    for i, gx in enumerate(xs):
+        ax.add_patch(patches.Circle((gx, y1 + ext), br, facecolor="white",
+                                    edgecolor=_CONC_EDGE, linewidth=1.3,
+                                    zorder=6))
+        ax.text(gx, y1 + ext, _bubble_letter(i), ha="center", va="center",
+                fontsize=_NOTE_FS, fontweight="bold", zorder=7)
+    for j, gy in enumerate(ys):
+        ax.add_patch(patches.Circle((x0 - ext, gy), br, facecolor="white",
+                                    edgecolor=_CONC_EDGE, linewidth=1.3,
+                                    zorder=6))
+        ax.text(x0 - ext, gy, str(j + 1), ha="center", va="center",
+                fontsize=_NOTE_FS, fontweight="bold", zorder=7)
+
+    for a, b in zip(xs[:-1], xs[1:]):
+        _hdim(ax, a, b, y0 - 0.15 * span, y0, f"{b - a:.2f}",
+              fs=_DIM_FS - 1.5)
+    for a, b in zip(ys[:-1], ys[1:]):
+        _vdim(ax, a, b, x0 - 0.22 * span, x0, f"{b - a:.2f}", left=True,
+              fs=_DIM_FS - 1.5)
+
+    pad = 0.32 * span
+    ax.set_xlim(x0 - pad, x1 + pad)
+    ax.set_ylim(y0 - pad, y1 + pad)
+    ax.set_aspect("equal", adjustable="box")
+    ax.axis("off")
+    ax.set_title("Structural Grid Plan — Column Load Map" if loads
+                 else "Structural Grid Plan", fontsize=_TITLE_FS)
+    fig.tight_layout(pad=0.8)
+    return fig
+
+
+# ===========================================================================
+# Column — P-M interaction diagram
+# ===========================================================================
+def draw_pm_diagram(Mn, Pn, phi_Mn, phi_Pn, Mu, Pu):
+    """Column axial-load / moment interaction diagram.
+
+    Grey dashed = nominal (Mn, Pn) · solid blue = design (phiMn, phiPn) ·
+    red dot = demand (Mu, Pu) · the region inside the design curve is
+    tinted green ("safe zone").  Returns a Matplotlib ``Figure``.
+    """
+    import numpy as _np
+    Mn = _np.asarray(Mn, dtype=float)
+    Pn = _np.asarray(Pn, dtype=float)
+    pM = _np.asarray(phi_Mn, dtype=float)
+    pP = _np.asarray(phi_Pn, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(7.4, 6.6))
+    ax.fill(pM, pP, color="#2e7d32", alpha=0.13, zorder=1,
+            label="Safe zone (inside design curve)")
+    ax.plot(Mn, Pn, color="#8a8f94", linewidth=1.4, linestyle="--",
+            zorder=3, label="Nominal  (Mn, Pn)")
+    ax.plot(pM, pP, color="#1f5fd0", linewidth=2.2, zorder=4,
+            label="Design  (phiMn, phiPn)")
+    ax.plot([Mu], [Pu], marker="o", ms=11, mfc="#c0392b", mec="#7a1f16",
+            mew=1.5, zorder=6, label="Demand  (Mu, Pu)")
+    ax.annotate(f"(Mu, Pu) = ({Mu:,.0f}, {Pu:,.0f})", xy=(Mu, Pu),
+                xytext=(12, 10), textcoords="offset points",
+                fontsize=_NOTE_FS, color="#c0392b")
+
+    ax.axhline(0.0, color=_CONC_EDGE, linewidth=0.8)
+    ax.axvline(0.0, color=_CONC_EDGE, linewidth=0.8)
+    ax.set_xlabel("phiMn  (kgf-m)", fontsize=_DIM_FS)
+    ax.set_ylabel("phiPn  (kgf)", fontsize=_DIM_FS)
+    ax.set_title("P-M Interaction Diagram (ACI 318M-08)", fontsize=_TITLE_FS)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=8, loc="upper right")
+
+    x_hi = max(float(Mn.max()), float(pM.max()), float(Mu)) * 1.18 + 1.0
+    ax.set_xlim(min(0.0, float(Mu) * 1.1), x_hi)
+    fig.tight_layout(pad=0.9)
+    return fig
+
+
+# ===========================================================================
 # Isolated footing — Plan + Elevation
 # ===========================================================================
 def draw_footing_plan(B_mm, L_mm, h_mm, cx_mm, cy_mm, covering_mm, bar_size,
@@ -1519,4 +1703,66 @@ def draw_stair_elevation(*, R_cm, T_cm, N, t_cm, covering_cm,
     ax.axis("off")
     ax.set_title("Stair Side Elevation", fontsize=_TITLE_FS)
     fig.tight_layout(pad=0.8)
+    return fig
+
+
+# ===========================================================================
+# Continuous beam — Shear Force & Bending Moment diagrams
+# ===========================================================================
+def draw_beam_diagrams(x, V, M):
+    """Stacked SFD (top) + BMD (bottom) for a continuous beam.
+
+    x : positions (m) · V : shear (kgf) · M : moment (kgf-m, sagging +ve).
+    Positive area filled blue, negative area red; the BMD y-axis is
+    inverted so sagging moment plots downward (engineering convention),
+    and both panels are clearly labelled.  Returns a Matplotlib ``Figure``.
+    """
+    import numpy as _np
+    x = _np.asarray(x, dtype=float)
+    V = _np.asarray(V, dtype=float)
+    M = _np.asarray(M, dtype=float)
+    _POS, _NEG = "#1f5fd0", "#c0392b"
+
+    fig, (ax_v, ax_m) = plt.subplots(2, 1, figsize=(8.6, 6.6), sharex=True)
+
+    # ---- Shear Force Diagram -----------------------------------------
+    ax_v.axhline(0.0, color=_CONC_EDGE, linewidth=1.1, zorder=3)
+    ax_v.plot(x, V, color="#1b1b1b", linewidth=1.3, zorder=4)
+    ax_v.fill_between(x, V, 0.0, where=(V >= 0.0), interpolate=True,
+                     color=_POS, alpha=0.35)
+    ax_v.fill_between(x, V, 0.0, where=(V < 0.0), interpolate=True,
+                     color=_NEG, alpha=0.35)
+    iv = int(_np.argmax(_np.abs(V)))
+    ax_v.annotate(f"Vu = {abs(V[iv]):,.0f} kgf", xy=(x[iv], V[iv]),
+                  xytext=(0, 12 if V[iv] >= 0 else -18),
+                  textcoords="offset points", ha="center", fontsize=_NOTE_FS,
+                  color=_NEG)
+    ax_v.set_title("Shear Force Diagram (SFD) — V(x)", fontsize=_TITLE_FS)
+    ax_v.set_ylabel("V (kgf)", fontsize=_DIM_FS)
+    ax_v.grid(True, alpha=0.25)
+
+    # ---- Bending Moment Diagram (sagging drawn downward) -------------
+    ax_m.axhline(0.0, color=_CONC_EDGE, linewidth=1.1, zorder=3)
+    ax_m.plot(x, M, color="#1b1b1b", linewidth=1.3, zorder=4)
+    ax_m.fill_between(x, M, 0.0, where=(M >= 0.0), interpolate=True,
+                     color=_POS, alpha=0.35)
+    ax_m.fill_between(x, M, 0.0, where=(M < 0.0), interpolate=True,
+                     color=_NEG, alpha=0.35)
+    ip, ineg = int(_np.argmax(M)), int(_np.argmin(M))
+    if M[ip] > 0:
+        ax_m.annotate(f"+Mu = {M[ip]:,.0f}", xy=(x[ip], M[ip]),
+                      xytext=(0, 12), textcoords="offset points",
+                      ha="center", fontsize=_NOTE_FS, color=_POS)
+    if M[ineg] < 0:
+        ax_m.annotate(f"-Mu = {abs(M[ineg]):,.0f}", xy=(x[ineg], M[ineg]),
+                      xytext=(0, -18), textcoords="offset points",
+                      ha="center", fontsize=_NOTE_FS, color=_NEG)
+    ax_m.invert_yaxis()                       # sagging (+M) plotted downward
+    ax_m.set_title("Bending Moment Diagram (BMD) — M(x)  "
+                   "[+M = sagging, drawn downward]", fontsize=_TITLE_FS)
+    ax_m.set_ylabel("M (kgf-m)", fontsize=_DIM_FS)
+    ax_m.set_xlabel("x (m)", fontsize=_DIM_FS)
+    ax_m.grid(True, alpha=0.25)
+
+    fig.tight_layout(pad=0.9)
     return fig

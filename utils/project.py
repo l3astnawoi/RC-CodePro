@@ -63,7 +63,8 @@ def get_project_info():
 
 
 def render_report_expander(*, key, filename, title, params, checks=None,
-                           figures=None, status=None, summary=None):
+                           figures=None, status=None, summary=None,
+                           boq_dataframe=None):
     """Standard bottom-of-page report block shared by every design module.
 
     Renders an expander '📄 ออกรายงานรายการคำนวณ (Generate Report)' with
@@ -78,6 +79,8 @@ def render_report_expander(*, key, filename, title, params, checks=None,
     figures  : Matplotlib Figure / BytesIO / list thereof (Section 3)
     status   : bool | "PASS" | "FAIL" (defaults to AND of the checks)
     summary  : optional one-line conclusion sentence
+    boq_dataframe : optional Pandas DataFrame / list-of-rows rendered as a
+                    "BOQ Estimate" table at the end of the PDF (Section 4)
     """
     from reports.pdf_generator import (build_report, FONT_AVAILABLE,
                                        font_status_message)
@@ -105,7 +108,7 @@ def render_report_expander(*, key, filename, title, params, checks=None,
                 title=title, project_name=pname, engineer=peng,
                 location=str(st.session_state.get("proj_location", "-")),
                 params=params, checks=checks, figures=figures,
-                status=status, summary=summary)
+                status=status, summary=summary, boq_dataframe=boq_dataframe)
             st.download_button(
                 "⬇️  ดาวน์โหลดรายงาน (.pdf)", data=pdf_bytes,
                 file_name=filename, mime="application/pdf",

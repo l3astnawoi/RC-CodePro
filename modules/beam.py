@@ -11,7 +11,9 @@ import streamlit as st
 
 from utils.aci_318m import (phi, rebars, get_beta1, calc_As_min, bar_area,
                             vc_beam, as_min_flexure_ksc, vc_beam_ksc)
-from utils.drawing import draw_beam_detail, draw_beam_3_sect, fig_to_png_buf
+from utils.analysis import solve_continuous_beam
+from utils.drawing import (draw_beam_detail, draw_beam_3_sect,
+                           draw_beam_diagrams, fig_to_png_buf)
 from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_beam_report,
@@ -86,14 +88,96 @@ UNDER_CONSTRUCTION = "กำลังอยู่ระหว่างการ�
 
 
 def render_beam_module():
-    beam_type = st.selectbox("เลือกประเภทคาน (Beam Type)", BEAM_TYPES,
-                             key="beam_type")
-    if beam_type == "Beam Section (หน้าตัดคาน)":
-        _render_beam_section()
-    elif beam_type == "Beam 3 Sect (คาน 3 หน้าตัด)":
-        _render_beam_3_sect()
-    else:
-        st.info(UNDER_CONSTRUCTION)
+    tab_an, tab_dsn = st.tabs(["📊 วิเคราะห์แรง (Analysis)",
+                               "🏗️ ออกแบบหน้าตัด (Design)"])
+    with tab_an:
+        _render_beam_analysis()
+    with tab_dsn:
+        beam_type = st.selectbox("เลือกประเภทคาน (Beam Type)", BEAM_TYPES,
+                                 key="beam_type")
+        if beam_type == "Beam Section (หน้าตัดคาน)":
+            _render_beam_section()
+        elif beam_type == "Beam 3 Sect (คาน 3 หน้าตัด)":
+            _render_beam_3_sect()
+        else:
+            st.info(UNDER_CONSTRUCTION)
+
+
+def _load_input(label, key, default, help=None):
+    """number_input for a factored-load field that the Analysis tab may
+    pre-fill via ``st.session_state`` — pass ``value`` only when the key is
+    not already set, so Streamlit does not warn about the double source."""
+    kw = {} if key in st.session_state else {"value": float(default)}
+    return st.number_input(label, min_value=0.0, step=100.0, format="%.0f",
+                           key=key, help=help, **kw)
+
+
+def _render_beam_analysis():
+    st.subheader("วิเคราะห์คานต่อเนื่อง (Continuous Beam Analysis)")
+    st.caption("ตัวแก้คาน 1 มิติ วิธี Matrix Stiffness — คานพาดต่อเนื่องบน "
+               "ฐานรองรับแบบ pin/roller รับน้ำหนักแผ่สม่ำเสมอ "
+               "(หน่วยเมตริก: m, kgf/m, kgf, kgf-m)")
+
+    with st.expander("ข้อมูลคานและน้ำหนักบรรทุก", expanded=True):
+        n_span = int(st.number_input("จำนวนช่วงคาน (Number of spans)",
+                                     min_value=1, max_value=5, value=2,
+                                     step=1, key="ba_nspan"))
+        scols = st.columns(n_span)
+        spans = []
+        for i in range(n_span):
+            with scols[i]:
+                spans.append(st.number_input(
+                    f"ช่วง L{i + 1} (m)", min_value=0.5, value=4.0,
+                    step=0.5, format="%.2f", key=f"ba_L{i}"))
+        d1, d2 = st.columns(2)
+        with d1:
+            DL = st.number_input("น้ำหนักบรรทุกคงที่ DL (kgf/m)",
+                                 min_value=0.0, value=1000.0, step=50.0,
+                                 key="ba_DL")
+        with d2:
+            LL = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m)", min_value=0.0,
+                                 value=800.0, step=50.0, key="ba_LL")
+
+    Wu = 1.2 * DL + 1.6 * LL
+    st.info(f"Wu = 1.2·DL + 1.6·LL = 1.2·{DL:,.0f} + 1.6·{LL:,.0f} = "
+            f"**{Wu:,.1f} kgf/m**")
+
+    if st.button("🔬 วิเคราะห์คาน (Analyze Beam)", type="primary",
+                 key="ba_run"):
+        try:
+            res = solve_continuous_beam(spans, Wu)
+        except Exception as exc:
+            st.error(f"วิเคราะห์ไม่สำเร็จ: {exc}")
+            res = None
+        if res is not None:
+            st.session_state["beam_diag"] = res
+            # push the governing forces straight into the Design-tab widgets
+            st.session_state["bs_Mup"] = float(round(res["Mu_pos_kgfm"]))
+            st.session_state["bs_Mun"] = float(round(res["Mu_neg_kgfm"]))
+            st.session_state["bs_Vu"] = float(round(res["Vu_kgf"]))
+
+    res = st.session_state.get("beam_diag")
+    if not res:
+        st.caption("กดปุ่ม «วิเคราะห์คาน» เพื่อคำนวณ BMD / SFD และส่งค่าไปแท็บออกแบบ")
+        return
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("+Mu สูงสุด (kgf-m)", f"{res['Mu_pos_kgfm']:,.0f}")
+    m2.metric("−Mu สูงสุด (kgf-m)", f"{res['Mu_neg_kgfm']:,.0f}")
+    m3.metric("Vu สูงสุด (kgf)", f"{res['Vu_kgf']:,.0f}")
+    st.markdown("**แรงปฏิกิริยาที่ฐานรองรับ (Reactions):**  " + "  ·  ".join(
+        f"R{i + 1} = {r:,.0f} kgf"
+        for i, r in enumerate(res["reactions_kgf"])))
+
+    try:
+        fig = draw_beam_diagrams(res["x"], res["V"], res["M"])
+        st.pyplot(fig, use_container_width=True)
+        fig_to_png_buf(fig)                         # release the figure
+    except Exception as exc:  # pragma: no cover
+        st.warning(f"ไม่สามารถวาดไดอะแกรมได้: {exc}")
+
+    st.success("บันทึกค่า +Mu, −Mu, Vu ไปยังแท็บ «ออกแบบหน้าตัด» แล้ว — "
+               "ช่องรับค่าจะถูกเติมให้อัตโนมัติ")
 
 
 def _shear_check(Vu_kN, b, d, fc, fy, stirrup_size, s_mm):
@@ -385,20 +469,19 @@ def _render_beam_section():
     # 2. Loads  — positive (mid-span) and negative (support) moment
     # ------------------------------------------------------------------
     with st.expander("แรงกระทำ (Loads)", expanded=True):
+        if "beam_diag" in st.session_state:
+            st.caption("ℹ️ ค่าด้านล่างถูกเติมจากแท็บ «วิเคราะห์แรง» — แก้ไขได้")
         l1, l2, l3 = st.columns(3)
         with l1:
-            Mu_pos = st.number_input(
-                "โมเมนต์บวก +Mu (กลางช่วง, kgf-m)", min_value=0.0,
-                value=15300.0, step=100.0, key="bs_Mup",
+            Mu_pos = _load_input(
+                "โมเมนต์บวก +Mu (กลางช่วง, kgf-m)", "bs_Mup", 15300.0,
                 help="ทำให้เกิดแรงดึงที่ด้านล่าง — ตรวจสอบด้วยเหล็กล่าง")
         with l2:
-            Mu_neg = st.number_input(
-                "โมเมนต์ลบ −Mu (ที่ฐานรองรับ, kgf-m)", min_value=0.0,
-                value=18000.0, step=100.0, key="bs_Mun",
-                help="ทำให้เกิดแรงดึงที่ด้านบน — ตรวจสอบด้วยเหล็กบน (ใส่เป็นค่าสัมบูรณ์)")
+            Mu_neg = _load_input(
+                "โมเมนต์ลบ −Mu (ที่ฐานรองรับ, kgf-m)", "bs_Mun", 18000.0,
+                help="ทำให้เกิดแรงดึงที่ด้านบน — ตรวจสอบด้วยเหล็กบน (ค่าสัมบูรณ์)")
         with l3:
-            Vu = st.number_input("แรงเฉือนประลัย Vu (kgf)", min_value=0.0,
-                                 value=12000.0, step=100.0, key="bs_Vu")
+            Vu = _load_input("แรงเฉือนประลัย Vu (kgf)", "bs_Vu", 12000.0)
     Mu_neg = abs(Mu_neg)
 
     # ------------------------------------------------------------------
