@@ -88,19 +88,105 @@ UNDER_CONSTRUCTION = "กำลังอยู่ระหว่างการ�
 
 
 def render_beam_module():
-    tab_an, tab_dsn = st.tabs(["📊 วิเคราะห์แรง (Analysis)",
-                               "🏗️ ออกแบบหน้าตัด (Design)"])
-    with tab_an:
-        _render_beam_analysis()
-    with tab_dsn:
-        beam_type = st.selectbox("เลือกประเภทคาน (Beam Type)", BEAM_TYPES,
-                                 key="beam_type")
-        if beam_type == "Beam Section (หน้าตัดคาน)":
-            _render_beam_section()
-        elif beam_type == "Beam 3 Sect (คาน 3 หน้าตัด)":
-            _render_beam_3_sect()
-        else:
-            st.info(UNDER_CONSTRUCTION)
+    """Dashboard layout — main visualisation / inputs on the left (3/4),
+    a compact live design-results panel on the right (1/4)."""
+    left, right = st.columns([3, 1], gap="large")
+
+    with left:
+        tab_an, tab_dsn = st.tabs(["📊 วิเคราะห์แรง (Analysis)",
+                                   "🏗️ ออกแบบหน้าตัด (Design)"])
+        with tab_an:
+            _render_beam_analysis()
+        with tab_dsn:
+            beam_type = st.selectbox("เลือกประเภทคาน (Beam Type)", BEAM_TYPES,
+                                     key="beam_type")
+            if beam_type == "Beam Section (หน้าตัดคาน)":
+                st.session_state["_beam_summary"] = _render_beam_section()
+            elif beam_type == "Beam 3 Sect (คาน 3 หน้าตัด)":
+                st.session_state["_beam_summary"] = _render_beam_3_sect()
+            else:
+                st.info(UNDER_CONSTRUCTION)
+                st.session_state["_beam_summary"] = None
+
+    with right:
+        _render_design_sidecard(st.session_state.get("_beam_summary"))
+
+
+# --- right-column design summary -------------------------------------------
+_LBL = "#cbd5e1"        # muted label on dark
+_OK = "#16a34a"
+_BAD = "#dc2626"
+_WARN = "#d97706"
+
+
+def _util_row(label, ratio):
+    """One 'demand / capacity' utilisation row: 'Ratio: 0.84 ✔️'."""
+    finite = isinstance(ratio, (int, float)) and math.isfinite(ratio)
+    ok = finite and ratio <= 1.0
+    colour = _OK if ok else _BAD
+    icon = "✔️" if ok else ("⚠️" if finite else "✖️")
+    val = f"{ratio:.2f}" if finite else "N/A"
+    return (
+        '<div style="display:flex;justify-content:space-between;'
+        'align-items:baseline;margin:3px 0;font-size:0.9rem;">'
+        f'<span style="color:{_LBL};">{label}</span>'
+        f'<span style="color:{colour};font-weight:700;">{val} {icon}</span>'
+        '</div>'
+    )
+
+
+def _pf_badge(label, ok):
+    """A coloured PASS / FAIL pill with its row label."""
+    colour = _OK if ok else _BAD
+    text = "PASS" if ok else "FAIL"
+    icon = "✔️" if ok else "✖️"
+    return (
+        '<div style="display:flex;justify-content:space-between;'
+        'align-items:center;margin:5px 0;">'
+        f'<span style="color:{_LBL};font-size:0.9rem;">{label}</span>'
+        f'<span style="background:{colour};color:#fff;padding:2px 10px;'
+        'border-radius:999px;font-size:0.76rem;font-weight:700;'
+        f'letter-spacing:0.03em;">{icon} {text}</span>'
+        '</div>'
+    )
+
+
+def _render_design_sidecard(summary):
+    st.markdown("### 📋 สรุปการออกแบบ")
+    if not summary:
+        st.caption("เลือกแท็บ «ออกแบบหน้าตัด» เพื่อดูผลสรุปแบบเรียลไทม์")
+        return
+
+    with st.container(border=True):
+        st.markdown("**เหล็กเสริมที่เลือก (Selected Rebar)**")
+        st.markdown(
+            '<div style="line-height:1.9;font-size:0.92rem;">'
+            f'🔺 เหล็กบน&nbsp;&nbsp;<b>{summary["top"]}</b><br>'
+            f'🔻 เหล็กล่าง&nbsp;&nbsp;<b>{summary["bot"]}</b><br>'
+            f'🔗 เหล็กปลอก&nbsp;&nbsp;<b>{summary["stirrup"]}</b>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    with st.container(border=True):
+        st.markdown("**อัตราส่วนกำลัง (Utilization)**")
+        st.markdown(
+            _util_row("เหล็กบน &minus;Mu", summary["ratio_top"])
+            + _util_row("เหล็กล่าง +Mu", summary["ratio_bot"])
+            + _util_row("แรงเฉือน Vu", summary["ratio_shear"]),
+            unsafe_allow_html=True,
+        )
+
+    with st.container(border=True):
+        st.markdown(
+            _pf_badge("เหล็กบน (Top)", summary["top_ok"])
+            + _pf_badge("เหล็กล่าง (Bottom)", summary["bottom_ok"])
+            + _pf_badge("เหล็กปลอก (Stirrups)", summary["shear_ok"])
+            + '<hr style="border:none;border-top:1px solid #334155;'
+            'margin:6px 0;">'
+            + _pf_badge("รวม (Overall)", summary["passed"]),
+            unsafe_allow_html=True,
+        )
 
 
 def _load_input(label, key, default, help=None):
@@ -171,8 +257,10 @@ def _render_beam_analysis():
 
     try:
         fig = draw_beam_diagrams(res["x"], res["V"], res["M"])
-        st.pyplot(fig, use_container_width=True)
-        fig_to_png_buf(fig)                         # release the figure
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.warning("ยังไม่ได้ติดตั้งไลบรารี Plotly — `pip install plotly` "
+                   "แล้วรีสตาร์ทแอป")
     except Exception as exc:  # pragma: no cover
         st.warning(f"ไม่สามารถวาดไดอะแกรมได้: {exc}")
 
@@ -431,6 +519,34 @@ def _render_beam_3_sect():
         bad = ", ".join(sh for sh, s in zip(short, secs) if not s["passed"])
         st.error(f"{FAIL_TXT} — หน้าตัดที่ไม่ผ่าน: {bad}")
 
+    def _r_top(s):
+        if not s["feas_top"] or not s["As_top_prov"]:
+            return float("inf")
+        return (s["As_top_req"] or 0.0) / s["As_top_prov"]
+
+    def _r_bot(s):
+        if not s["feas_bot"] or not s["As_bot_prov"]:
+            return float("inf")
+        return (s["As_bot_req"] or 0.0) / s["As_bot_prov"]
+
+    def _r_shear(s):
+        return (s["Vu_kN"] / s["phiVn_kN"]) if s["phiVn_kN"] else float("inf")
+
+    return {
+        "kind": "3sect",
+        "top": " · ".join(f"{s['top_qty']}-{s['top_size']}" for s in secs),
+        "bot": " · ".join(f"{s['bot_qty']}-{s['bot_size']}" for s in secs),
+        "stirrup": " · ".join(
+            f"{s['stirrup_size']}@{s['stirrup_sp_cm']:.0f}" for s in secs),
+        "ratio_top": max(_r_top(s) for s in secs),
+        "ratio_bot": max(_r_bot(s) for s in secs),
+        "ratio_shear": max(_r_shear(s) for s in secs),
+        "top_ok": all(s["top_req_ok"] and s["top_min_ok"] for s in secs),
+        "bottom_ok": all(s["bot_req_ok"] and s["bot_min_ok"] for s in secs),
+        "shear_ok": all(s["shear_ok"] for s in secs),
+        "passed": overall,
+    }
+
 
 def _render_beam_section():
     st.title("การออกแบบคาน (หน้าตัดคาน — โมเมนต์บวก / ลบ)")
@@ -525,7 +641,7 @@ def _render_beam_section():
     d_top = h - cov - sdia - top_dia / 2.0   # tension = top    (-Mu)
     if min(d_top, d_bot) <= 0.0:
         st.error("ความลึกประสิทธิผล d ≤ 0 — ตรวจสอบ h ระยะหุ้ม หรือขนาดเหล็ก")
-        return
+        return None
 
     # ------------------------------------------------------------------
     # Bottom bars vs positive moment
@@ -715,6 +831,23 @@ def _render_beam_section():
         status=passed,
         summary=("ผ่านทั้งการดัดเหล็กบน/ล่าง และแรงเฉือน" if passed
                  else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
+
+    def _ratio(demand, capacity):
+        return (demand / capacity) if capacity > 0.0 else float("inf")
+
+    return {
+        "kind": "section",
+        "top": f"{top_qty} - {top_size}",
+        "bot": f"{bot_qty} - {bot_size}",
+        "stirrup": f"{stir_size} @ {S:.0f} cm",
+        "ratio_top": _ratio(Mu_neg, phiMn_top),
+        "ratio_bot": _ratio(Mu_pos, phiMn_bot),
+        "ratio_shear": _ratio(Vu, phiVn),
+        "top_ok": top_ok,
+        "bottom_ok": bottom_ok,
+        "shear_ok": shear_ok,
+        "passed": passed,
+    }
 
 
 # Backwards-compatible alias

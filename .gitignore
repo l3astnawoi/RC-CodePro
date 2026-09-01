@@ -53,3 +53,6 @@ fonts/*.cw127.pkl
 # Keep the Thai TrueType fonts in the repo
 !fonts/*.ttf
 NUL
+
+# Claude Code local dev tooling
+.claude/

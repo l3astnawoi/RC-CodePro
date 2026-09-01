@@ -863,6 +863,119 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
 
 
 # ===========================================================================
+# Building modeler — interactive 3D frame (Plotly)
+# ===========================================================================
+def draw_3d_building(active_columns, void_panels, x_coords, y_coords,
+                     floor_height_m):
+    """Interactive 3D view of one storey of the modelled grid.
+
+    * vertical columns at every active node, ``z = 0 .. floor_height_m``
+    * a horizontal grid of floor-framing beams at ``z = floor_height_m``
+      (only along grid lines that bound a solid slab panel)
+    * translucent slab panels at ``z = floor_height_m`` for every solid
+      (non-void) panel
+
+    Plotly is imported lazily so the rest of this module keeps working when
+    the package is absent; the caller may catch ``ImportError``.
+    Returns a Plotly ``go.Figure``.
+    """
+    import plotly.graph_objects as go
+
+    xs = [float(v) for v in x_coords] or [0.0]
+    ys = [float(v) for v in y_coords] or [0.0]
+    H = float(floor_height_m)
+    voids = {(int(i), int(j)) for i, j in (void_panels or [])}
+    active = [(round(float(px), 3), round(float(py), 3))
+              for px, py in (active_columns or [])]
+
+    _COL3D, _BEAM3D, _SLAB3D = "#1f5fd0", "#37474f", "#8fb3d9"
+    fig = go.Figure()
+
+    # ---- columns --------------------------------------------------------
+    cx, cy, cz = [], [], []
+    for px, py in active:
+        cx += [px, px, None]
+        cy += [py, py, None]
+        cz += [0.0, H, None]
+    if cx:
+        fig.add_trace(go.Scatter3d(
+            x=cx, y=cy, z=cz, mode="lines",
+            line=dict(color=_COL3D, width=8),
+            name="เสา (Columns)", hoverinfo="skip"))
+
+    # ---- floor-framing beams at z = H --------------------------------
+    h_edges, v_edges = set(), set()
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            if (i, j) in voids:
+                continue
+            h_edges.add((i, j))
+            h_edges.add((i, j + 1))
+            v_edges.add((i, j))
+            v_edges.add((i + 1, j))
+    bx, by, bz = [], [], []
+    for i, j in h_edges:
+        bx += [xs[i], xs[i + 1], None]
+        by += [ys[j], ys[j], None]
+        bz += [H, H, None]
+    for i, j in v_edges:
+        bx += [xs[i], xs[i], None]
+        by += [ys[j], ys[j + 1], None]
+        bz += [H, H, None]
+    if bx:
+        fig.add_trace(go.Scatter3d(
+            x=bx, y=by, z=bz, mode="lines",
+            line=dict(color=_BEAM3D, width=4),
+            name="คาน / พื้น (Framing)", hoverinfo="skip"))
+
+    # ---- translucent slab panels at z = H --------------------------
+    mx, my, mz, mi, mj, mk = [], [], [], [], [], []
+    base = 0
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            if (i, j) in voids:
+                continue
+            mx += [xs[i], xs[i + 1], xs[i + 1], xs[i]]
+            my += [ys[j], ys[j], ys[j + 1], ys[j + 1]]
+            mz += [H, H, H, H]
+            mi += [base, base]
+            mj += [base + 1, base + 2]
+            mk += [base + 2, base + 3]
+            base += 4
+    if mx:
+        fig.add_trace(go.Mesh3d(
+            x=mx, y=my, z=mz, i=mi, j=mj, k=mk,
+            color=_SLAB3D, opacity=0.35, flatshading=True,
+            name="แผ่นพื้น (Slab)", hoverinfo="skip", showscale=False))
+
+    # ---- layout — equal X/Y scale, soft grid backgrounds ----------
+    span_x = (xs[-1] - xs[0]) or 1.0
+    span_y = (ys[-1] - ys[0]) or 1.0
+    _axis = dict(backgroundcolor="#f4f6f8", showbackground=True,
+                 gridcolor="#d9dee3", zerolinecolor="#c2c9d1")
+    fig.update_layout(
+        title="Building 3D Frame",
+        height=560,
+        margin=dict(l=0, r=0, t=36, b=0),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=0.0,
+                    xanchor="center", x=0.5),
+        scene=dict(
+            xaxis=dict(title="X (m)", **_axis),
+            yaxis=dict(title="Y (m)", **_axis),
+            zaxis=dict(title="Z (m)", backgroundcolor="#eef1f4",
+                       showbackground=True, gridcolor="#d9dee3",
+                       zerolinecolor="#c2c9d1"),
+            aspectmode="manual",
+            aspectratio=dict(x=1.0, y=span_y / span_x,
+                             z=min(max(H / span_x, 0.25), 1.2)),
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.1)),
+        ),
+    )
+    return fig
+
+
+# ===========================================================================
 # Column — P-M interaction diagram
 # ===========================================================================
 def draw_pm_diagram(Mn, Pn, phi_Mn, phi_Pn, Mu, Pu):
@@ -1710,59 +1823,90 @@ def draw_stair_elevation(*, R_cm, T_cm, N, t_cm, covering_cm,
 # Continuous beam — Shear Force & Bending Moment diagrams
 # ===========================================================================
 def draw_beam_diagrams(x, V, M):
-    """Stacked SFD (top) + BMD (bottom) for a continuous beam.
+    """Interactive stacked SFD (top) + BMD (bottom) for a continuous beam.
 
     x : positions (m) · V : shear (kgf) · M : moment (kgf-m, sagging +ve).
-    Positive area filled blue, negative area red; the BMD y-axis is
-    inverted so sagging moment plots downward (engineering convention),
-    and both panels are clearly labelled.  Returns a Matplotlib ``Figure``.
+
+    Plotly figure on the ``plotly_dark`` template with a transparent
+    paper / plot background so it blends into the app's dark theme.  The
+    shear area is filled blue (``#3b82f6``) and the moment area green
+    (``#10b981``); peak Vu / +Mu / -Mu are annotated.  Plotly is imported
+    lazily so the rest of this module still works without it; the caller
+    may catch ``ImportError``.  Returns a Plotly ``go.Figure``.
     """
     import numpy as _np
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
     x = _np.asarray(x, dtype=float)
     V = _np.asarray(V, dtype=float)
     M = _np.asarray(M, dtype=float)
-    _POS, _NEG = "#1f5fd0", "#c0392b"
+    _BLUE, _GREEN = "#3b82f6", "#10b981"
+    _ZERO = "rgba(255,255,255,0.35)"
+    _GRID = "rgba(255,255,255,0.08)"
 
-    fig, (ax_v, ax_m) = plt.subplots(2, 1, figsize=(8.6, 6.6), sharex=True)
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.13,
+        subplot_titles=("Shear Force Diagram (SFD) — V(x)",
+                        "Bending Moment Diagram (BMD) — M(x)"),
+    )
 
-    # ---- Shear Force Diagram -----------------------------------------
-    ax_v.axhline(0.0, color=_CONC_EDGE, linewidth=1.1, zorder=3)
-    ax_v.plot(x, V, color="#1b1b1b", linewidth=1.3, zorder=4)
-    ax_v.fill_between(x, V, 0.0, where=(V >= 0.0), interpolate=True,
-                     color=_POS, alpha=0.35)
-    ax_v.fill_between(x, V, 0.0, where=(V < 0.0), interpolate=True,
-                     color=_NEG, alpha=0.35)
-    iv = int(_np.argmax(_np.abs(V)))
-    ax_v.annotate(f"Vu = {abs(V[iv]):,.0f} kgf", xy=(x[iv], V[iv]),
-                  xytext=(0, 12 if V[iv] >= 0 else -18),
-                  textcoords="offset points", ha="center", fontsize=_NOTE_FS,
-                  color=_NEG)
-    ax_v.set_title("Shear Force Diagram (SFD) — V(x)", fontsize=_TITLE_FS)
-    ax_v.set_ylabel("V (kgf)", fontsize=_DIM_FS)
-    ax_v.grid(True, alpha=0.25)
+    # ---- Shear Force Diagram --------------------------------------------
+    fig.add_trace(
+        go.Scatter(x=x, y=V, mode="lines", name="V(x)",
+                   line=dict(color=_BLUE, width=2),
+                   fill="tozeroy", fillcolor="rgba(59,130,246,0.25)",
+                   hovertemplate="x = %{x:.2f} m<br>V = %{y:,.0f} kgf"
+                                 "<extra></extra>"),
+        row=1, col=1,
+    )
 
-    # ---- Bending Moment Diagram (sagging drawn downward) -------------
-    ax_m.axhline(0.0, color=_CONC_EDGE, linewidth=1.1, zorder=3)
-    ax_m.plot(x, M, color="#1b1b1b", linewidth=1.3, zorder=4)
-    ax_m.fill_between(x, M, 0.0, where=(M >= 0.0), interpolate=True,
-                     color=_POS, alpha=0.35)
-    ax_m.fill_between(x, M, 0.0, where=(M < 0.0), interpolate=True,
-                     color=_NEG, alpha=0.35)
-    ip, ineg = int(_np.argmax(M)), int(_np.argmin(M))
-    if M[ip] > 0:
-        ax_m.annotate(f"+Mu = {M[ip]:,.0f}", xy=(x[ip], M[ip]),
-                      xytext=(0, 12), textcoords="offset points",
-                      ha="center", fontsize=_NOTE_FS, color=_POS)
-    if M[ineg] < 0:
-        ax_m.annotate(f"-Mu = {abs(M[ineg]):,.0f}", xy=(x[ineg], M[ineg]),
-                      xytext=(0, -18), textcoords="offset points",
-                      ha="center", fontsize=_NOTE_FS, color=_NEG)
-    ax_m.invert_yaxis()                       # sagging (+M) plotted downward
-    ax_m.set_title("Bending Moment Diagram (BMD) — M(x)  "
-                   "[+M = sagging, drawn downward]", fontsize=_TITLE_FS)
-    ax_m.set_ylabel("M (kgf-m)", fontsize=_DIM_FS)
-    ax_m.set_xlabel("x (m)", fontsize=_DIM_FS)
-    ax_m.grid(True, alpha=0.25)
+    # ---- Bending Moment Diagram --------------------------------------
+    fig.add_trace(
+        go.Scatter(x=x, y=M, mode="lines", name="M(x)",
+                   line=dict(color=_GREEN, width=2),
+                   fill="tozeroy", fillcolor="rgba(16,185,129,0.22)",
+                   hovertemplate="x = %{x:.2f} m<br>M = %{y:,.0f} kgf-m"
+                                 "<extra></extra>"),
+        row=2, col=1,
+    )
 
-    fig.tight_layout(pad=0.9)
+    for r in (1, 2):
+        fig.add_hline(y=0.0, line_width=1.1, line_color=_ZERO, row=r, col=1)
+
+    # ---- peak annotations --------------------------------------------
+    if V.size:
+        iv = int(_np.argmax(_np.abs(V)))
+        fig.add_annotation(x=x[iv], y=V[iv], row=1, col=1,
+                           text=f"Vu = {abs(V[iv]):,.0f} kgf",
+                           showarrow=True, arrowhead=2, arrowcolor=_BLUE,
+                           font=dict(color=_BLUE, size=12),
+                           yshift=14 if V[iv] >= 0 else -14)
+    if M.size:
+        ip, ineg = int(_np.argmax(M)), int(_np.argmin(M))
+        if M[ip] > 0.0:
+            fig.add_annotation(x=x[ip], y=M[ip], row=2, col=1,
+                               text=f"+Mu = {M[ip]:,.0f}", showarrow=True,
+                               arrowhead=2, arrowcolor=_GREEN,
+                               font=dict(color=_GREEN, size=12), yshift=14)
+        if M[ineg] < 0.0:
+            fig.add_annotation(x=x[ineg], y=M[ineg], row=2, col=1,
+                               text=f"-Mu = {abs(M[ineg]):,.0f}",
+                               showarrow=True, arrowhead=2, arrowcolor="#f87171",
+                               font=dict(color="#f87171", size=12), yshift=-14)
+
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=560,
+        margin=dict(l=10, r=10, t=44, b=10),
+        showlegend=False,
+        hovermode="x unified",
+    )
+    fig.update_xaxes(gridcolor=_GRID, zeroline=False)
+    fig.update_yaxes(gridcolor=_GRID, zeroline=False)
+    fig.update_yaxes(title_text="V (kgf)", row=1, col=1)
+    fig.update_yaxes(title_text="M (kgf-m)", row=2, col=1)
+    fig.update_xaxes(title_text="x (m)", row=2, col=1)
     return fig

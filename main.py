@@ -1,90 +1,110 @@
-"""RC Structure Design (ภาษาไทย)
+"""RC CodePro — RC structure design to ACI 318M-08 (Thai UI, MKS units).
 
-โปรแกรม Streamlit สำหรับการออกแบบโครงสร้างคอนกรีตเสริมเหล็กตามมาตรฐาน
-ACI 318M-08 (หน่วยเมตริก)
+Dashboard-style shell: a branded icon navigation rail (``st.navigation`` +
+``st.logo``) on the left, the project-info panel in the sidebar, and each
+design module rendered as its own page.
 """
 
 import streamlit as st
 
 from utils.project import render_project_info_sidebar
 
-APP_TITLE = "การออกแบบโครงสร้างคอนกรีตเสริมเหล็ก"
+APP_TITLE = "RC CodePro"
 CODE_REFERENCE = "ACI 318M-08"
-
-# Sidebar labels (Thai) -> renderer key
-HOME = "หน้าหลัก"
-BUILDING = "🏢 จำลองอาคาร (Building Model)"
-BEAM = "คาน"
-COLUMN = "เสา"
-SLAB = "พื้น"
-FOOTING = "ฐานราก"
-STAIR = "บันได"
-
-MENU_ITEMS = [HOME, BUILDING, BEAM, COLUMN, SLAB, FOOTING, STAIR]
+LOGO = "assets/logo.svg"
 
 
-def show_welcome():
-    st.title(APP_TITLE)
+def _home():
+    st.title("RC CodePro")
     st.subheader(f"การออกแบบคอนกรีตเสริมเหล็กตามมาตรฐาน {CODE_REFERENCE}")
     st.write(
-        "ยินดีต้อนรับ! เครื่องมือนี้ช่วยในการออกแบบชิ้นส่วนโครงสร้างคอนกรีต"
-        "เสริมเหล็กให้เป็นไปตามมาตรฐาน ACI 318M-08 (หน่วยเมตริก)"
+        "ยินดีต้อนรับ! เครื่องมือนี้ช่วยออกแบบชิ้นส่วนโครงสร้างคอนกรีตเสริมเหล็ก "
+        "ให้เป็นไปตามมาตรฐาน ACI 318M-08 (หน่วยเมตริก) — เลือกโมดูลจากแถบเมนู"
+        "ด้านซ้าย"
     )
-    st.markdown(
-        """
-        **เริ่มต้นใช้งาน**
 
-        เลือกชิ้นส่วนโครงสร้างที่ต้องการออกแบบจากเมนูด้านซ้าย:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### 🏢 จำลองอาคาร")
+            st.caption("ระบบเส้นกริด · ถ่ายน้ำหนักลงเสา · จัดกลุ่มเบอร์เสา · "
+                       "ถอดปริมาณวัสดุ (BOQ) · โมเดล 3 มิติ")
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### 🏗️ ออกแบบชิ้นส่วน")
+            st.caption("คาน (วิเคราะห์ + ออกแบบ) · เสา (P–M) · พื้น · ฐานราก · "
+                       "บันได — ครบทั้งการดัด แรงเฉือน และการจัดเหล็ก")
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### 📄 รายงาน")
+            st.caption("ออกรายการคำนวณ PDF ภาษาไทย พร้อมภาพ CAD และตาราง "
+                       "Demand / Capacity ในทุกโมดูล")
 
-        - **🏢 จำลองอาคาร (Building Model)** &mdash; กำหนดระบบเส้นกริดและตำแหน่งเสา
-        - **คาน** &mdash; การดัด แรงเฉือน และการจัดเหล็กเสริมของคาน คสล.
-        - **เสา** &mdash; การตรวจสอบกำลังรับแรงตามแนวแกน
-        - **พื้น** &mdash; การออกแบบพื้นทางเดียว
-        - **ฐานราก** &mdash; การออกแบบฐานรากเดี่ยว
-        - **บันได** &mdash; การออกแบบบันไดพาดทางเดียว
-        """
-    )
-    st.info("เลือกโมดูลจากเมนูด้านซ้ายเพื่อเริ่มต้น")
+
+def _beam():
+    from modules.beam import render_beam_module
+    render_beam_module()
 
 
-def show_placeholder(name):
-    st.title(name)
-    st.write(f"โมดูล **{name}** ยังไม่พร้อมใช้งาน")
-    st.caption(f"มาตรฐานอ้างอิง: {CODE_REFERENCE}")
+def _column():
+    from modules.column import render_column_module
+    render_column_module()
+
+
+def _slab():
+    from modules.slab import render_slab_module
+    render_slab_module()
+
+
+def _footing():
+    from modules.footing import render_footing_module
+    render_footing_module()
+
+
+def _stair():
+    from modules.stair import render_stair_module
+    render_stair_module()
+
+
+def _building():
+    from modules.building import render_building_model
+    render_building_model()
 
 
 def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    st.set_page_config(page_title=APP_TITLE, page_icon="🏗️", layout="wide")
+    st.logo(LOGO, icon_image=LOGO)
 
-    st.sidebar.title(APP_TITLE)
-    st.sidebar.caption(CODE_REFERENCE)
+    pages = {
+        "ทั่วไป": [
+            st.Page(_home, title="หน้าหลัก", icon=":material/home:",
+                    url_path="home", default=True),
+        ],
+        "ออกแบบชิ้นส่วน (Member Design)": [
+            st.Page(_beam, title="คาน (Beam)",
+                    icon=":material/horizontal_rule:", url_path="beam"),
+            st.Page(_column, title="เสา (Column)",
+                    icon=":material/view_column:", url_path="column"),
+            st.Page(_slab, title="พื้น (Slab)",
+                    icon=":material/grid_on:", url_path="slab"),
+            st.Page(_footing, title="ฐานราก (Footing)",
+                    icon=":material/foundation:", url_path="footing"),
+            st.Page(_stair, title="บันได (Stair)",
+                    icon=":material/stairs:", url_path="stair"),
+        ],
+        "แบบจำลองอาคาร (Building Model)": [
+            st.Page(_building, title="จำลองอาคาร (Building)",
+                    icon=":material/apartment:", url_path="building"),
+        ],
+    }
 
-    render_project_info_sidebar()
+    pg = st.navigation(pages, expanded=True)
 
-    choice = st.sidebar.radio("เมนู", MENU_ITEMS)
+    with st.sidebar:
+        render_project_info_sidebar()
+        st.caption(f"{APP_TITLE} · {CODE_REFERENCE} · หน่วยเมตริก (MKS)")
 
-    if choice == HOME:
-        show_welcome()
-    elif choice == BUILDING:
-        from modules.building import render_building_model
-        render_building_model()
-    elif choice == BEAM:
-        from modules.beam import render_beam_module
-        render_beam_module()
-    elif choice == COLUMN:
-        from modules.column import render_column_module
-        render_column_module()
-    elif choice == SLAB:
-        from modules.slab import render_slab_module
-        render_slab_module()
-    elif choice == FOOTING:
-        from modules.footing import render_footing_module
-        render_footing_module()
-    elif choice == STAIR:
-        from modules.stair import render_stair_module
-        render_stair_module()
-    else:
-        show_placeholder(choice)
+    pg.run()
 
 
 if __name__ == "__main__":

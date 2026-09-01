@@ -15,7 +15,7 @@ import html as _html
 import streamlit as st
 
 from utils.boq import estimate_building_boq
-from utils.drawing import draw_grid_plan
+from utils.drawing import draw_3d_building, draw_grid_plan
 from utils.project import render_report_expander
 
 COLUMN_MARKS = ["C1", "C2", "C3", "C4", "C5"]
@@ -42,8 +42,9 @@ def _html_table(headers, rows, *, right_from=1, emphasize_last=False):
         return "right" if k >= right_from else "left"
 
     head = "".join(
-        f'<th style="text-align:{_align(k)};padding:6px 12px;'
-        f'border-bottom:2px solid #b0b7c3;white-space:nowrap;">'
+        f'<th style="text-align:{_align(k)};padding:7px 12px;'
+        f'border-bottom:2px solid #475569;white-space:nowrap;'
+        f'color:#94a3b8;font-weight:600;">'
         f'{_html.escape(str(h))}</th>'
         for k, h in enumerate(headers)
     )
@@ -51,16 +52,16 @@ def _html_table(headers, rows, *, right_from=1, emphasize_last=False):
     n = len(rows)
     for ri, row in enumerate(rows):
         last = emphasize_last and ri == n - 1
+        row_bg = "#1e3a5f" if last else ("#172033" if ri % 2 else "#0f172a")
+        txt = "#f8fafc" if last else "#e2e8f0"
         cells = "".join(
-            f'<td style="text-align:{_align(k)};padding:5px 12px;'
-            f'border-bottom:1px solid #e4e7ec;'
-            f'{"font-weight:700;" if last else ""}">'
+            f'<td style="text-align:{_align(k)};padding:6px 12px;'
+            f'border-bottom:1px solid #334155;background:{row_bg};'
+            f'color:{txt};{"font-weight:700;" if last else ""}">'
             f'{_html.escape(_fmt_cell(c))}</td>'
             for k, c in enumerate(row)
         )
-        bg = ("background:#f5f7fa;" if last
-              else "background:#fbfcfd;" if ri % 2 else "")
-        body.append(f'<tr style="{bg}">{cells}</tr>')
+        body.append(f'<tr>{cells}</tr>')
     st.markdown(
         '<table style="border-collapse:collapse;width:100%;'
         'font-size:0.92rem;margin:0.25rem 0 0.5rem;">'
@@ -308,6 +309,24 @@ def render_building_model():
     )
     st.pyplot(fig, use_container_width=True)
     st.caption("ผังเส้นกริด เสา แผ่นพื้น และแรงถ่ายลงเสา (Column Load Map)")
+
+    with st.expander("🧊 โมเดลอาคาร 3 มิติ (3D Viewer)", expanded=False):
+        fh_3d = float(st.session_state.get("bm_boq_fh", 3.0))
+        try:
+            fig_3d = draw_3d_building(
+                active_columns, void_panels, x_coords, y_coords,
+                floor_height_m=fh_3d,
+            )
+            st.plotly_chart(fig_3d, use_container_width=True)
+            st.caption(
+                f"ความสูงชั้น {fh_3d:.2f} m — ลากเมาส์เพื่อหมุน / สกรอลล์เพื่อซูม "
+                "(ปรับความสูงได้ในหัวข้อ BOQ Estimate)"
+            )
+        except ImportError:
+            st.warning(
+                "ยังไม่ได้ติดตั้งไลบรารี Plotly — ติดตั้งด้วยคำสั่ง "
+                "`pip install plotly` แล้วรีสตาร์ทแอป"
+            )
 
     with st.expander("📊 วิเคราะห์แรงถ่ายลงเสา (Column Load Takedown)",
                      expanded=True):

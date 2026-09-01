@@ -3,3 +3,4 @@ numpy
 fpdf2
 uharfbuzz
 matplotlib
+plotly
