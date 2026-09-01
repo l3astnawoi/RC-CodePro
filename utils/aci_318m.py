@@ -221,3 +221,32 @@ def calc_As_min(fc, fy, b, d):
     fc, fy : MPa      b, d : mm
     """
     return as_min_flexure(fc, fy, b, d)
+
+
+# ---------------------------------------------------------------------------
+# MKS-unit helpers (ksc / cm / kgf) — used by the modules that work directly
+# in metric engineering units instead of SI.
+# ---------------------------------------------------------------------------
+
+def rho_min_flexure_ksc(fc_ksc, fy_ksc):
+    """Minimum flexural reinforcement ratio, ACI 318M-08 10.5.1 in MKS:
+
+        rho_min = max( 0.8 * sqrt(fc') / fy ,  14 / fy )      (fc', fy in ksc)
+
+    This is the ksc/cm/kgf equivalent of ``rho_min_flexure`` (0.25*sqrt/1.4).
+    """
+    return max(0.8 * math.sqrt(fc_ksc) / fy_ksc, 14.0 / fy_ksc)
+
+
+def as_min_flexure_ksc(fc_ksc, fy_ksc, b_cm, d_cm):
+    """Minimum flexural steel area As_min (cm^2) for a section b x d (cm),
+    with f'c / fy in ksc.  MKS mirror of :func:`as_min_flexure`."""
+    return rho_min_flexure_ksc(fc_ksc, fy_ksc) * b_cm * d_cm
+
+
+def vc_beam_ksc(fc_ksc, b_cm, d_cm):
+    """Concrete one-way shear strength Vc (kgf), ACI 318M-08 11.2.1.1 in MKS:
+
+        Vc = 0.53 * sqrt(fc') * b * d        (fc' in ksc, b/d in cm -> kgf)
+    """
+    return 0.53 * math.sqrt(fc_ksc) * b_cm * d_cm

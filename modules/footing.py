@@ -23,7 +23,7 @@ import streamlit as st
 
 from utils.aci_318m import phi, rebars
 from utils.drawing import draw_footing_plan, draw_pile_cap_plan
-from utils.project import get_project_info
+from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_footing_report,
     generate_pile_cap_report,
@@ -507,60 +507,6 @@ def _render_isolated_footing():
             f"{PASS_TXT} — ผ่านทุกการตรวจสอบ: กำลังแบกทานดิน แรงเฉือนทะลุ "
             f"แรงเฉือนคาน (ยาว/สั้น) และการดัด (ยาว/สั้น)"
         )
-
-        if not FONT_AVAILABLE:
-            st.warning(font_status_message())
-
-        pdf_bytes = generate_footing_report(
-            {
-                "P_DL_kgf": P_DL_kgf, "P_LL_kgf": P_LL_kgf,
-                "Wf_kgf": Wf_kgf, "Total_DL_kgf": Total_DL_kgf,
-                "Pu_kgf": Pu_kgf,
-                "q_a_kgf": q_a_ton * 1000.0, "B_m": B_m, "L_m": L_m,
-                "col_shape": "circ" if is_circular else "rect",
-                "cx": cx, "cy": cy, "Dc": Dc,
-                "h": h, "covering": covering, "fc": fc, "fy": fy,
-                "project": get_project_info(),
-            },
-            {
-                "d_long": d_long, "d_short": d_short, "d_avg": d_avg,
-                "q_service_kgf": q_service_kgf,
-                "qu_net_kgf": qu_net_kgf,
-                "Vup_kN": Vup / 1000.0,
-                "phiVc_punch_kN": phiVc_punch / 1000.0,
-                # long / short one-way shear
-                "Vu_long_kN": Vu_long / 1000.0,
-                "phiVc_long_kN": phiVc_v_long / 1000.0,
-                "Vu_short_kN": Vu_short / 1000.0,
-                "phiVc_short_kN": phiVc_v_short / 1000.0,
-                # long / short flexure
-                "Mu_long_kNm": Mu_long / 1.0e6,
-                "Mu_short_kNm": Mu_short / 1.0e6,
-                "As_req_long": As_req_long if feas_long else None,
-                "As_req_short": As_req_short if feas_short else None,
-                "As_min_long": As_min_long, "As_min_short": As_min_short,
-                "As_prov_long": As_prov_long, "As_prov_short": As_prov_short,
-                "size_long": size_long, "n_long": n_long,
-                "s_long_cm": s_long / CM,
-                "size_short": size_short, "n_short": n_short,
-                "s_short_cm": s_short / CM,
-                "s_max_cm": s_max / CM,
-                "bearing_ok": bearing_ok,
-                "punch_ok": punch_ok,
-                "beam_long_ok": beam_long_ok, "beam_short_ok": beam_short_ok,
-                "flex_long_ok": flex_long_ok, "flex_short_ok": flex_short_ok,
-                "asmin_long_ok": asmin_long_ok, "asmin_short_ok": asmin_short_ok,
-                "sp_long_ok": sp_long_ok, "sp_short_ok": sp_short_ok,
-                "section_img": section_img,
-                "status": "PASS",
-            },
-        )
-        st.download_button(
-            "ดาวน์โหลดรายงานการคำนวณ",
-            data=pdf_bytes,
-            file_name="footing_design_report.pdf",
-            mime="application/pdf",
-        )
     else:
         failed = []
         if not bearing_ok:
@@ -598,6 +544,57 @@ def _render_isolated_footing():
             failed.append(f"ระยะเรียงด้านสั้น S = {s_short / CM:,.1f} > "
                           f"s_max = {s_max / CM:,.1f} cm (เพิ่มจำนวนเส้น)")
         st.error(f"{FAIL_TXT} — " + "; ".join(failed))
+
+    # ------------------------------------------------------------------
+    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
+    _colsz = (f"กลม Ø {Dc / CM:,.1f} cm" if is_circular
+              else f"{cx / CM:,.1f} × {cy / CM:,.1f} cm")
+    render_report_expander(
+        key="foot_iso", filename="footing_design_report.pdf",
+        title="การออกแบบฐานรากเดี่ยวคอนกรีตเสริมเหล็ก (ACI 318M-08)",
+        params=[
+            ("ขนาดฐานราก B × L", f"{B_m:.2f} × {L_m:.2f} m"),
+            ("ความหนาฐานราก h", h_cm, "cm", 1),
+            ("ระยะหุ้มคอนกรีต", covering_cm, "cm", 1),
+            ("ขนาดเสา", _colsz),
+            ("f'c", fc_ksc, "ksc", 0), ("fy", fy_ksc, "ksc", 0),
+            ("กำลังแบกทานดิน qa", q_a_ton * 1000.0, "kgf/m²", 0),
+            ("P_DL / P_LL", f"{P_DL_kgf:,.0f} / {P_LL_kgf:,.0f} kgf"),
+            ("น้ำหนักฐานรากเอง Wf", Wf_kgf, "kgf", 0),
+            ("แรงประลัยรวม Pu", Pu_kgf, "kgf", 0),
+            ("เหล็กด้านยาว", f"{n_long} - {size_long}"),
+            ("เหล็กด้านสั้น", f"{n_short} - {size_short}"),
+        ],
+        checks=[
+            ("กำลังแบกทานดิน (ใช้งาน)", f"{q_service_kgf:,.0f} kgf/m²",
+             f"{q_a_ton * 1000.0:,.0f} kgf/m²", bearing_ok),
+            ("แรงเฉือนทะลุ สองทาง (Vu ≤ φVc)", f"{Vup * _kf:,.0f} kgf",
+             f"{phiVc_punch * _kf:,.0f} kgf", punch_ok),
+            ("แรงเฉือนคาน — ด้านยาว", f"{Vu_long * _kf:,.0f} kgf",
+             f"{phiVc_v_long * _kf:,.0f} kgf", beam_long_ok),
+            ("แรงเฉือนคาน — ด้านสั้น", f"{Vu_short * _kf:,.0f} kgf",
+             f"{phiVc_v_short * _kf:,.0f} kgf", beam_short_ok),
+            ("การดัด — ด้านยาว (As,prov ≥ As,req)",
+             f"{As_prov_long / 100.0:,.2f} cm²",
+             (f"{As_req_long / 100.0:,.2f} cm²" if feas_long else "—"),
+             flex_long_ok),
+            ("การดัด — ด้านสั้น (As,prov ≥ As,req)",
+             f"{As_prov_short / 100.0:,.2f} cm²",
+             (f"{As_req_short / 100.0:,.2f} cm²" if feas_short else "—"),
+             flex_short_ok),
+            ("เหล็กขั้นต่ำ — ด้านยาว", f"{As_prov_long / 100.0:,.2f} cm²",
+             f"{As_min_long / 100.0:,.2f} cm²", asmin_long_ok),
+            ("เหล็กขั้นต่ำ — ด้านสั้น", f"{As_prov_short / 100.0:,.2f} cm²",
+             f"{As_min_short / 100.0:,.2f} cm²", asmin_short_ok),
+            ("ระยะเรียง — ด้านยาว (S ≤ s_max)", f"{s_long / CM:,.1f} cm",
+             f"{s_max / CM:,.1f} cm", sp_long_ok),
+            ("ระยะเรียง — ด้านสั้น (S ≤ s_max)", f"{s_short / CM:,.1f} cm",
+             f"{s_max / CM:,.1f} cm", sp_short_ok),
+        ],
+        figures=[("รายละเอียดฐานราก (Plan + Elevation)", section_img)],
+        status=passed,
+        summary=("ฐานรากเดี่ยวผ่านทุกการตรวจสอบ" if passed
+                 else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 # ===========================================================================
@@ -1195,77 +1192,62 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
     st.subheader("ผลการตรวจสอบ")
     if passed:
         st.success(f"{PASS_TXT} — ผ่านทุกการตรวจสอบสำหรับฐานเสาเข็ม {n_piles} ต้น")
-
-        if not FONT_AVAILABLE:
-            st.warning(font_status_message())
-
-        pdf_bytes = generate_pile_cap_report(
-            {
-                "P_serv_kgf": P_serv_tot_kgf, "Pu_net_kgf": Pu_net_kgf,
-                "pile_cap_kgf": pile_cap_kgf, "n_piles": n_piles,
-                "pile_shape": pile_shape_th, "pile_perim_txt": pile_perim_txt,
-                "Dp": Dp, "c": c, "h": h, "covering": covering,
-                "pile_embed_cm": pile_embed_cm,
-                "manual_cap": bool(manual_cap),
-                "fc": fc, "fy": fy,
-                "ex_cm": ex_cm, "ey_cm": ey_cm,
-                "Muy_kgfm": Muy_kgfm, "Mux_kgfm": Mux_kgfm,
-                "project": get_project_info(),
-            },
-            {
-                "d_long": d_long, "d_short": d_short, "d_avg": d_avg,
-                "R_serv_kgf": R_serv_kgf,
-                "R_max_kgf": R_max_kgf,
-                "R_min_kgf": R_min_kgf,
-                "Ru_avg_kgf": Ru_N / 1000.0 * KN_TO_KGF,
-                "Ru_max_kgf": Ru_max_N / 1000.0 * KN_TO_KGF,
-                "S": S,
-                "edge": edge,
-                "cap_W": cap_W,
-                "cap_L": cap_L,
-                "n_inside": n_inside,
-                "Vup_kN": Vup / 1000.0,
-                "phiVc_punch_kN": phiVc_punch / 1000.0,
-                "phiVc_pile_kN": phiVc_pile / 1000.0,
-                # long / short one-way shear
-                "Vu_long_kN": Vu_long / 1000.0,
-                "phiVc_long_kN": phiVc_long / 1000.0,
-                "Vu_short_kN": Vu_short / 1000.0,
-                "phiVc_short_kN": phiVc_short / 1000.0,
-                # long / short flexure
-                "Mu_long_kNm": Mu_long / 1.0e6,
-                "Mu_short_kNm": Mu_short / 1.0e6,
-                "As_req_long": As_req_long if feas_long else None,
-                "As_req_short": As_req_short if feas_short else None,
-                "As_min_long": As_min_long, "As_min_short": As_min_short,
-                "As_prov_long": As_prov_long, "As_prov_short": As_prov_short,
-                "size_long": size_long, "n_long": n_long,
-                "s_long_cm": s_long / CM,
-                "size_short": size_short, "n_short": n_short,
-                "s_short_cm": s_short / CM,
-                "s_max_cm": s_max / CM,
-                "sp_long_ok": sp_long_ok, "sp_short_ok": sp_short_ok,
-                "reaction_ok": reaction_ok,
-                "uplift_ok": uplift_ok,
-                "punch_ok": punch_ok,
-                "pile_punch_ok": pile_punch_ok,
-                "beam_long_ok": beam_long_ok, "beam_short_ok": beam_short_ok,
-                "flex_long_ok": flex_long_ok, "flex_short_ok": flex_short_ok,
-                "asmin_long_ok": asmin_long_ok, "asmin_short_ok": asmin_short_ok,
-                "section_img": section_img,
-                "status": "PASS",
-            },
-        )
-        tag = f"F{n_piles}E" if is_eccentric else f"F{n_piles}"
-        st.download_button(
-            "ดาวน์โหลดรายงานการคำนวณ",
-            data=pdf_bytes,
-            file_name=f"pile_cap_{tag}_report.pdf",
-            mime="application/pdf",
-        )
     else:
         st.error(f"{FAIL_TXT} — มีรายการที่ไม่ผ่าน โปรดตรวจสอบตารางด้านบน")
     st.caption("หมายเหตุ: โมดูลฐานเสาเข็มเป็นการคำนวณเบื้องต้นตาม ACI 318M-08")
+
+    # ------------------------------------------------------------------
+    _tag = f"F{n_piles}E" if is_eccentric else f"F{n_piles}"
+    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
+    render_report_expander(
+        key=f"{kp}_gen", filename=f"pile_cap_{_tag}_report.pdf",
+        title="การออกแบบฐานรากเสาเข็มคอนกรีตเสริมเหล็ก (ACI 318M-08)",
+        params=[
+            ("ประเภทฐานราก", f"{_tag} — เสาเข็ม {n_piles} ต้น"),
+            ("รูปร่าง / ขนาดเสาเข็ม", f"{pile_shape_th} / {pile_size_cm:,.1f} cm"),
+            ("กำลังรับปลอดภัยของเสาเข็ม", pile_cap_kgf, "kgf/ต้น", 0),
+            ("ขนาดเสา c", c_cm, "cm", 1), ("ความหนาฐานราก h", h_cm, "cm", 1),
+            ("ระยะหุ้มคอนกรีต", covering_cm, "cm", 1),
+            ("ระยะฝังเข็ม", pile_embed_cm, "cm", 1),
+            ("f'c", fc_ksc, "ksc", 0), ("fy", fy_ksc, "ksc", 0),
+            ("ระยะเยื้องศูนย์ ex , ey", f"{ex_cm:,.1f} , {ey_cm:,.1f} cm"),
+            ("Pu,net = 1.2P_DL + 1.6P_LL", Pu_net_kgf, "kgf", 0),
+            ("ขนาดฐานราก (กว้าง × ยาว)",
+             f"{cap_W / CM:,.0f} × {cap_L / CM:,.0f} cm"),
+            ("เหล็กด้านยาว", f"{n_long} - {size_long}"),
+            ("เหล็กด้านสั้น", f"{n_short} - {size_short}"),
+        ],
+        checks=[
+            ("แรงในเสาเข็มสูงสุด ≤ กำลังปลอดภัย",
+             f"{R_max_kgf:,.0f} kgf/ต้น", f"{pile_cap_kgf:,.0f} kgf/ต้น",
+             reaction_ok),
+            ("ไม่มีแรงถอน (Rmin ≥ 0)", f"{R_min_kgf:,.0f} kgf/ต้น", "≥ 0",
+             uplift_ok),
+            ("แรงเฉือนทะลุสองทาง (Vu ≤ φVc)", f"{Vup * _kf:,.0f} kgf",
+             f"{phiVc_punch * _kf:,.0f} kgf", punch_ok),
+            ("แรงเฉือนทะลุหัวเข็ม (Ru ≤ φVc)", f"{Ru_max_N * _kf:,.0f} kgf",
+             f"{phiVc_pile * _kf:,.0f} kgf", pile_punch_ok),
+            ("แรงเฉือนคาน — ด้านยาว", f"{Vu_long * _kf:,.0f} kgf",
+             f"{phiVc_long * _kf:,.0f} kgf", beam_long_ok),
+            ("แรงเฉือนคาน — ด้านสั้น", f"{Vu_short * _kf:,.0f} kgf",
+             f"{phiVc_short * _kf:,.0f} kgf", beam_short_ok),
+            ("การดัด — ด้านยาว (As,prov ≥ As,req)",
+             f"{As_prov_long / 100.0:,.2f} cm²",
+             (f"{As_req_long / 100.0:,.2f} cm²" if feas_long else "—"),
+             flex_long_ok),
+            ("การดัด — ด้านสั้น (As,prov ≥ As,req)",
+             f"{As_prov_short / 100.0:,.2f} cm²",
+             (f"{As_req_short / 100.0:,.2f} cm²" if feas_short else "—"),
+             flex_short_ok),
+            ("ระยะเรียง — ด้านยาว (S ≤ s_max)", f"{s_long / CM:,.1f} cm",
+             f"{s_max / CM:,.1f} cm", sp_long_ok),
+            ("ระยะเรียง — ด้านสั้น (S ≤ s_max)", f"{s_short / CM:,.1f} cm",
+             f"{s_max / CM:,.1f} cm", sp_short_ok),
+        ],
+        figures=[("รายละเอียดฐานราก (Plan + Side View)", section_img)],
+        status=passed,
+        summary=(f"ฐานรากเสาเข็ม {_tag} ผ่านทุกการตรวจสอบ" if passed
+                 else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 # ===========================================================================

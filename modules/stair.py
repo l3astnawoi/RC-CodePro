@@ -12,8 +12,9 @@ import math
 import streamlit as st
 
 from utils.aci_318m import phi, rebars, bar_area
-from utils.drawing import draw_slab_strip, draw_u_stair_elevation
-from utils.project import get_project_info
+from utils.drawing import (draw_slab_strip, draw_u_stair_elevation,
+                           draw_stair_elevation, fig_to_png_buf)
+from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_stair_report,
     generate_u_stair_report,
@@ -55,6 +56,34 @@ def _required_as_flexure(Mu_kNm, b, d, fc, fy):
         return None, Rn, None, False
     rho = (0.85 * fc / fy) * (1.0 - math.sqrt(disc))
     return rho * b * d, Rn, rho, True
+
+
+STAIR_BAR_SIZES = ["RB9", "DB10", "DB12", "DB16", "DB20"]
+
+
+def _as_flexure_ksc(Mu_kgfm, b_cm, d_cm, fc_ksc, fy_ksc):
+    """Singly-reinforced As (cm2) for a strip ``b_cm`` wide, MKS units.
+    Returns (As_cm2, feasible)."""
+    if d_cm <= 0.0 or Mu_kgfm <= 0.0:
+        return 0.0, True
+    Rn = (Mu_kgfm * 100.0) / (phi["flexure"] * b_cm * d_cm ** 2)   # ksc
+    disc = 1.0 - 2.0 * Rn / (0.85 * fc_ksc)
+    if disc < 0.0:
+        return None, False
+    rho = (0.85 * fc_ksc / fy_ksc) * (1.0 - math.sqrt(disc))
+    return rho * b_cm * d_cm, True
+
+
+def _spacing_for(Ab_cm2, As_req_cm2, s_max_cm):
+    """Bar spacing (cm, rounded down to 2.5 cm) delivering ``As_req`` per
+    metre with a bar of area ``Ab``; capped at ``s_max``.  (S_cm, As_prov)."""
+    if As_req_cm2 <= 1.0e-9:
+        S = s_max_cm
+    else:
+        S_req = Ab_cm2 * 100.0 / As_req_cm2
+        S = min(math.floor(S_req / 2.5) * 2.5, s_max_cm)
+        S = max(S, 2.5)
+    return S, Ab_cm2 * 100.0 / S
 
 
 STAIR_TYPES = [
@@ -338,282 +367,242 @@ def _render_u_shape_stair():
 
 
 def _render_straight_stair():
-    st.title("การออกแบบบันได")
-    st.caption("บันไดพาดตรง — พื้นทางเดียวรับแรงแบบช่วงเดี่ยว แถบกว้าง 1 ม. "
-               "ตามมาตรฐาน ACI 318M-08 (หน่วยเมตริก)")
+    st.title("การออกแบบบันไดช่วงตรง (Straight Stair)")
+    st.caption("ออกแบบเป็นพื้นทางเดียวเอียง (inclined one-way slab) แถบกว้าง "
+               "1 เมตร ตามมาตรฐาน ACI 318M-08 — หน่วยเมตริก "
+               "(cm, kgf, kgf-m, ksc, kgf/m²)")
 
-    b = STRIP_WIDTH          # mm (internal)
-    b_cm = b / CM            # cm (display)
-
-    # ------------------------------------------------------------------
-    # Inputs
-    # ------------------------------------------------------------------
-    st.subheader("ข้อมูลป้อนเข้า")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        L = st.number_input("ช่วงพาดในแนวราบ L (m)", min_value=1.0,
-                            value=3.0, step=0.001, format="%.3f")
-        t_cm = st.number_input("ความหนาท้องบันได t (cm)", min_value=8.0,
-                               value=15.0, step=0.01, format="%.2f")
-        fc_ksc = st.number_input("กำลังอัดคอนกรีต f'c (ksc)", min_value=180,
-                                 value=240, step=10, format="%d")
-    with c2:
-        T_cm = st.number_input("ลูกนอน T (cm)", min_value=20.0,
-                               value=25.0, step=0.01, format="%.2f")
-        SDL_kgf = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
-                                  min_value=0.0, value=150.0, step=10.0)
-        fy_ksc = st.number_input("กำลังครากเหล็กเสริม fy (ksc)", min_value=2800,
-                                 value=4000, step=100, format="%d")
-    with c3:
-        R_cm = st.number_input("ลูกตั้ง R (cm)", min_value=10.0,
-                               value=17.5, step=0.01, format="%.2f")
-        LL_kgf = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m²)", min_value=0.0,
-                                 value=300.0, step=50.0)
-        covering_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=1.5,
-                                      value=2.0, step=0.01, format="%.2f")
-
-    st.number_input("ความกว้างแถบออกแบบ b (cm)", value=b_cm, disabled=True,
-                    step=0.01, format="%.2f", help="กำหนดคงที่ที่แถบกว้าง 1 ม.")
-
-    # MKS -> SI for the ACI calculation core (L already in metres)
-    t = t_cm * CM
-    T = T_cm * CM
-    R = R_cm * CM
-    covering = covering_cm * CM
-    fc = fc_ksc * KSC_TO_MPA
-    fy = fy_ksc * KSC_TO_MPA
-    # SDL / LL stay in kgf/m² here; the load block below keeps the dead-load
-    # arithmetic in exact MKS and only mirrors the result to SI afterwards.
+    b = 100.0        # cm — a 1 m wide strip
 
     # ------------------------------------------------------------------
-    # Reinforcement
+    # 1. Geometry
     # ------------------------------------------------------------------
-    st.subheader("เหล็กเสริม")
-    m1, m2 = st.columns(2)
-    with m1:
-        main_size = st.selectbox("ขนาดเหล็กเสริมหลัก", list(rebars.keys()),
-                                 index=list(rebars).index("DB12"))
-        main_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมหลัก (cm)", min_value=5.0,
-                                     max_value=45.0, value=15.0, step=1.0,
-                                     format="%.1f")
-    with m2:
-        temp_size = st.selectbox("ขนาดเหล็กเสริมกันร้าว", list(rebars.keys()),
-                                 index=list(rebars).index("RB9"))
-        temp_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมกันร้าว (cm)",
-                                     min_value=5.0, max_value=45.0,
-                                     value=20.0, step=1.0, format="%.1f")
-
-    main_spacing = main_sp_cm * CM               # cm -> mm
-    temp_spacing = temp_sp_cm * CM
-
-    main_area = rebars[main_size]
-    temp_area = rebars[temp_size]
-    main_dia = float(main_size[2:])
-    temp_dia = float(temp_size[2:])
+    with st.expander("รูปเรขาคณิต (Geometry)", expanded=True):
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
+            R_cm = st.number_input("ลูกตั้ง R (cm)", min_value=10.0, value=17.5,
+                                   step=0.5, format="%.1f", key="st_R")
+        with g2:
+            T_cm = st.number_input("ลูกนอน T (cm)", min_value=20.0, value=25.0,
+                                   step=0.5, format="%.1f", key="st_T")
+        with g3:
+            N = int(st.number_input("จำนวนขั้น N", min_value=3, value=12,
+                                    step=1, key="st_N"))
+        with g4:
+            W_m = st.number_input("ความกว้างบันได W (m)", min_value=0.8,
+                                  value=1.20, step=0.05, format="%.2f",
+                                  key="st_W")
 
     # ------------------------------------------------------------------
-    # Geometry & loads
+    # 2. Section & Material
     # ------------------------------------------------------------------
-    theta = math.atan(R / T)                                     # rad
-    waist_term = (t / 1000.0) / math.cos(theta) + (R / 2000.0)   # m (equiv. slab thk)
-
-    # --- Exact MKS loads: concrete unit weight is literally 2400 kgf/m³ ----
-    SW_kgf = CONC_DENSITY_KGF * waist_term                       # kgf/m²
-    DL_kgf = SW_kgf + SDL_kgf                                    # kgf/m²
-    wu_kgf = 1.2 * DL_kgf + 1.6 * LL_kgf                         # kgf/m (1 m strip)
-
-    # --- SI mirror for the ACI 318M-08 calculation core only --------------
-    SW = SW_kgf * KGF_TO_KN                                      # kN/m²
-    DL = DL_kgf * KGF_TO_KN                                      # kN/m²
-    wu = wu_kgf * KGF_TO_KN                                      # kN/m (1 m strip)
-    Mu = wu * L ** 2 / 8.0                                       # kN·m/m
+    with st.expander("หน้าตัดและวัสดุ (Section & Material)", expanded=True):
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            t_cm = st.number_input("ความหนาท้องบันได t (cm)", min_value=8.0,
+                                   value=15.0, step=0.5, format="%.1f",
+                                   key="st_t")
+        with s2:
+            cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=1.5,
+                                     value=2.0, step=0.5, format="%.1f",
+                                     key="st_cov")
+        with s3:
+            fc_ksc = st.number_input("f'c (ksc)", min_value=180, value=240,
+                                     step=10, format="%d", key="st_fc")
+        with s4:
+            fy_ksc = st.number_input("fy (ksc)", min_value=2400, value=4000,
+                                     step=100, format="%d", key="st_fy")
 
     # ------------------------------------------------------------------
-    # Effective depth (mm)
+    # 3. Loads
     # ------------------------------------------------------------------
-    d = t - covering - main_dia / 2.0
-    if d <= 0:
-        st.error("ความลึกประสิทธิผล d ≤ 0 — ตรวจสอบระยะหุ้ม ความหนาท้องบันได "
-                 "หรือขนาดเหล็กเสริม")
+    with st.expander("แรงกระทำ (Loads)", expanded=True):
+        l1, l2 = st.columns(2)
+        with l1:
+            SDL = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
+                                  min_value=0.0, value=150.0, step=10.0,
+                                  key="st_sdl")
+        with l2:
+            LL = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m²)", min_value=0.0,
+                                 value=300.0, step=50.0, key="st_ll")
+
+    # ------------------------------------------------------------------
+    # 4. Reinforcement
+    # ------------------------------------------------------------------
+    with st.expander("เหล็กเสริม (Reinforcement)", expanded=True):
+        r1, r2 = st.columns(2)
+        with r1:
+            main_size = st.selectbox("เหล็กเสริมหลัก (ตามยาว) — ขนาด",
+                                     STAIR_BAR_SIZES,
+                                     index=STAIR_BAR_SIZES.index("DB12"),
+                                     key="st_msz")
+        with r2:
+            temp_size = st.selectbox("เหล็กกันร้าว (ตามขวาง) — ขนาด",
+                                     STAIR_BAR_SIZES,
+                                     index=STAIR_BAR_SIZES.index("DB10"),
+                                     key="st_tsz")
+
+    # ---- MKS working values ----------------------------------------
+    R, T, t, cov = float(R_cm), float(T_cm), float(t_cm), float(cov_cm)
+    fc, fy = float(fc_ksc), float(fy_ksc)
+    db_main = float(main_size[2:]) / 10.0        # cm
+    Ab_main = bar_area(main_size) / 100.0        # cm2 per bar
+    Ab_temp = bar_area(temp_size) / 100.0
+
+    # ---- Geometry -----------------------------------------------
+    Lx = (N * T) / 100.0                         # m — horizontal span
+    theta = math.atan2(R, T)                     # rad
+    cos_th = math.cos(theta)
+
+    # ---- Loads per horizontal square metre (kgf/m²) ------------
+    DL_waist = (t / 100.0) * CONC_DENSITY_KGF / cos_th   # waist slab (sloped)
+    DL_steps = ((R / 100.0) / 2.0) * CONC_DENSITY_KGF    # triangular steps
+    DL = DL_waist + DL_steps + SDL
+    Wu = 1.2 * DL + 1.6 * LL                     # kgf/m²  (= kgf/m on 1 m strip)
+    Mu = Wu * Lx ** 2 / 8.0                      # kgf-m per 1 m strip
+
+    # ---- Effective depth (cm) ---------------------------------
+    d = t - cov - db_main / 2.0
+    if d <= 0.0:
+        st.error("ความลึกประสิทธิผล d ≤ 0 — เพิ่ม t หรือลดระยะหุ้ม / ขนาดเหล็ก")
         return
 
-    # ------------------------------------------------------------------
-    # Required steel
-    # ------------------------------------------------------------------
-    As_req, Rn, rho, feasible = _required_as_flexure(Mu, b, d, fc, fy)
-    temp_ratio = _temp_steel_ratio(fy)
-    As_min = temp_ratio * b * t
+    # ---- Flexural + temperature steel ------------------------
+    As_req, feas = _as_flexure_ksc(Mu, b, d, fc, fy)
+    if not feas:
+        st.error("ท้องบันไดบางเกินไปสำหรับการดัด — เพิ่ม t หรือ f'c")
+        return
+    temp_ratio = _temp_steel_ratio(fy * KSC_TO_MPA)
+    As_temp_min = temp_ratio * b * t             # cm2 / m
+    As_main = max(As_req or 0.0, As_temp_min)
 
-    As_prov_main = main_area * (b / main_spacing)
-    As_prov_temp = temp_area * (b / temp_spacing)
+    s_max_main = min(3.0 * t, 45.0)              # ACI 13.3.2 / 10.5.4
+    s_max_temp = min(5.0 * t, 45.0)             # ACI 7.12.2.2
+    S_main, Asp_main = _spacing_for(Ab_main, As_main, s_max_main)
+    S_temp, Asp_temp = _spacing_for(Ab_temp, As_temp_min, s_max_temp)
 
-    max_sp_main = min(3.0 * t, 450.0)
-    max_sp_temp = min(5.0 * t, 450.0)
-    sp_main_ok = main_spacing <= max_sp_main
-    sp_temp_ok = temp_spacing <= max_sp_temp
+    main_ok = 7.5 <= S_main <= s_max_main
+    temp_ok = 7.5 <= S_temp <= s_max_temp
+    passed = main_ok and temp_ok
 
     # ------------------------------------------------------------------
-    # Load analysis
+    # Calculation breakdown
     # ------------------------------------------------------------------
     st.subheader("การวิเคราะห์น้ำหนักบรรทุก")
     st.markdown(
         f"""
 | รายการ | ค่า |
 |---|---|
-| มุมลาดเอียง θ = atan(R/T) | {math.degrees(theta):,.2f}° |
-| น้ำหนักตัวเอง SW = 2400·(t/cosθ + R/2) | {SW_kgf:,.1f} kgf/m² |
-| น้ำหนักบรรทุกคงที่รวม DL = SW + SDL | {DL_kgf:,.1f} kgf/m² |
-| น้ำหนักบรรทุกประลัย wu = 1.2·DL + 1.6·LL | **{wu_kgf:,.1f} kgf/m** |
-| โมเมนต์ประลัย Mu = wu·L²/8 | **{Mu * KN_TO_KGF:,.0f} kgf-m/m** |
+| ช่วงพาดในแนวราบ Lx = N·T/100 = {N}·{T:.1f}/100 | **{Lx:,.2f} m** |
+| มุมลาดเอียง θ = arctan(R/T) | {math.degrees(theta):,.2f}° |
+| DL ท้องบันได = (t/100)·2400 / cosθ | {DL_waist:,.1f} kgf/m² |
+| DL ขั้นบันได = (R/100 / 2)·2400 | {DL_steps:,.1f} kgf/m² |
+| DL รวม = ท้องบันได + ขั้นบันได + SDL | **{DL:,.1f} kgf/m²** |
+| น้ำหนักบรรทุกประลัย Wu = 1.2·DL + 1.6·LL | **{Wu:,.1f} kgf/m²** |
+| โมเมนต์ประลัย Mu = Wu·Lx²/8 (ต่อแถบ 1 ม.) | **{Mu:,.0f} kgf-m** |
 """
     )
 
-    # ------------------------------------------------------------------
-    # Calculation steps
-    # ------------------------------------------------------------------
     st.subheader("ขั้นตอนการคำนวณ")
     st.markdown(
         f"""
 | รายการ | ค่า |
 |---|---|
-| เส้นผ่านศูนย์กลางเหล็กหลัก Ø | {main_dia:.1f} mm |
-| ความลึกประสิทธิผล d = t − covering − Ø/2 | **{d / CM:,.2f} cm** |
-| φ (การดัด) | {phi['flexure']:.2f} |
-| Rn = Mu / (φ·b·d²) | {Rn / KSC_TO_MPA:,.1f} ksc |
+| ความลึกประสิทธิผล d = t − covering − Ø_หลัก/2 | **{d:,.2f} cm** |
+| As เหล็กหลักที่ต้องการ (การดัด) | {(As_req or 0.0):,.2f} cm²/m |
+| อัตราส่วนเหล็กกันร้าว/อุณหภูมิ | {temp_ratio:.4f} |
+| As,temp = ratio·b·t | **{As_temp_min:,.2f} cm²/m** |
+| As เหล็กหลักควบคุม = max(การดัด, As,temp) | **{As_main:,.2f} cm²/m** |
+| ระยะเรียงสูงสุด — เหล็กหลัก min(3t, 45) | {s_max_main:,.1f} cm |
+| ระยะเรียงสูงสุด — เหล็กกันร้าว min(5t, 45) | {s_max_temp:,.1f} cm |
+| ระยะเรียงที่จัดให้ — เหล็กหลัก ({main_size}) | **{S_main:,.1f} cm** (As≈{Asp_main:,.2f} cm²/m) |
+| ระยะเรียงที่จัดให้ — เหล็กกันร้าว ({temp_size}) | **{S_temp:,.1f} cm** (As≈{Asp_temp:,.2f} cm²/m) |
 """
     )
 
     # ------------------------------------------------------------------
-    # Visual detailing — 1 m strip cross-section (t, covering, spacings in mm)
+    # Metric cards
+    # ------------------------------------------------------------------
+    st.subheader("ผลการตรวจสอบ")
+    c_main, c_temp = st.columns(2)
+    with c_main:
+        st.markdown("#### ระยะเรียงเหล็กหลัก")
+        st.metric(f"S / s_max (cm) — {main_size}",
+                  f"{S_main:,.1f} / {s_max_main:,.1f}")
+        (st.success if main_ok else st.error)(
+            (PASS_TXT if main_ok else FAIL_TXT) + " — เหล็กหลัก")
+    with c_temp:
+        st.markdown("#### ระยะเรียงเหล็กกันร้าว")
+        st.metric(f"S / s_max (cm) — {temp_size}",
+                  f"{S_temp:,.1f} / {s_max_temp:,.1f}")
+        (st.success if temp_ok else st.error)(
+            (PASS_TXT if temp_ok else FAIL_TXT) + " — เหล็กกันร้าว")
+
+    # ------------------------------------------------------------------
+    # CAD side elevation
     # ------------------------------------------------------------------
     section_img = None
     try:
-        section_img = draw_slab_strip(
-            t, covering, main_dia, temp_dia, main_spacing, temp_spacing,
-            main_label=f"เหล็กหลัก {main_size} @ {main_sp_cm:.0f} cm",
-            temp_label=f"เหล็กกันร้าว {temp_size} @ {temp_sp_cm:.0f} cm",
-            span_m=L)
-        st.image(section_img, caption="รายละเอียดหน้าตัด (Section Detailing)")
-    except Exception as exc:  # pragma: no cover - drawing must never break the page
-        st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
-
-    if not feasible:
-        st.error("ท้องบันไดบางเกินไปสำหรับการเสริมเหล็กรับแรงดึงอย่างเดียว "
-                 "(1 − 2·Rn/(0.85·f'c) < 0) — เพิ่ม t หรือ f'c")
-        st.markdown(
-            f"เหล็กกันร้าว/อุณหภูมิ As,min = **{As_min / 100.0:,.2f} cm²/m**  ·  "
-            f"As หลักที่จัดให้ = **{As_prov_main / 100.0:,.2f} cm²/m**"
-        )
-        st.error(f"{FAIL_TXT} — ท้องบันไดไม่เพียงพอสำหรับการดัด")
-        return
-
-    As_design = max(As_req, As_min)
-    st.markdown(
-        f"""
-| รายการ | ค่า |
-|---|---|
-| ρ = 0.85·f'c/fy · (1 − √(1 − 2·Rn/0.85·f'c)) | {rho:.5f} |
-| As ที่ต้องการ (การดัด) = ρ·b·d | **{As_req / 100.0:,.2f} cm²/m** |
-| อัตราส่วนเหล็กกันร้าว/อุณหภูมิ (fy = {fy_ksc:,.0f} ksc) | {temp_ratio:.4f} |
-| As,min = ratio · b · t | {As_min / 100.0:,.2f} cm²/m |
-| As หลักที่ต้องการที่ควบคุม = max(การดัด, As,min) | **{As_design / 100.0:,.2f} cm²/m** |
-| หลัก: {main_size} @ {main_sp_cm:.1f} cm → {main_area / 100.0:,.2f} cm² × (100/s) | **{As_prov_main / 100.0:,.2f} cm²/m** |
-| ระยะเรียงสูงสุด (หลัก) = min(3t, 450) | {max_sp_main / CM:,.1f} cm |
-| กันร้าว: {temp_size} @ {temp_sp_cm:.1f} cm → {temp_area / 100.0:,.2f} cm² × (100/s) | **{As_prov_temp / 100.0:,.2f} cm²/m** |
-| ระยะเรียงสูงสุด (กันร้าว) = min(5t, 450) | {max_sp_temp / CM:,.1f} cm |
-"""
-    )
+        fig = draw_stair_elevation(
+            R_cm=R, T_cm=T, N=N, t_cm=t, covering_cm=cov,
+            main_label=f"Main: {main_size} @ {S_main:.0f} cm",
+            temp_label=f"Temp: {temp_size} @ {S_temp:.0f} cm")
+        st.pyplot(fig, use_container_width=True)
+        st.caption("รูปด้านบันได (Stair Side Elevation)")
+        section_img = fig_to_png_buf(fig)
+    except Exception as exc:  # pragma: no cover
+        st.warning(f"ไม่สามารถสร้างภาพรูปด้านได้: {exc}")
 
     # ------------------------------------------------------------------
-    # Design checks
+    # Overall verdict
     # ------------------------------------------------------------------
-    st.subheader("การตรวจสอบการออกแบบ")
-    as_req_ok = As_prov_main >= As_req
-    as_min_ok = As_prov_main >= As_min
-    temp_min_ok = As_prov_temp >= As_min
-    passed = as_req_ok and as_min_ok and temp_min_ok and sp_main_ok and sp_temp_ok
-
-    def _s(ok):
-        return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
-
-    st.markdown(
-        f"""
-| การตรวจสอบ | แรงที่กระทำ | กำลังต้านทาน / ขีดจำกัด | สถานะ |
-|---|---|---|---|
-| As หลัก ≥ ที่ต้องการ | As,prov = {As_prov_main / 100.0:,.2f} cm²/m | As,req = {As_req / 100.0:,.2f} cm²/m | {_s(as_req_ok)} |
-| As หลัก ≥ As,min | As,prov = {As_prov_main / 100.0:,.2f} cm²/m | As,min = {As_min / 100.0:,.2f} cm²/m | {_s(as_min_ok)} |
-| As กันร้าว ≥ As,min | As,prov = {As_prov_temp / 100.0:,.2f} cm²/m | As,min = {As_min / 100.0:,.2f} cm²/m | {_s(temp_min_ok)} |
-| ระยะเรียงหลัก ≤ ขีดจำกัด | s = {main_sp_cm:.1f} cm | {max_sp_main / CM:,.1f} cm | {_s(sp_main_ok)} |
-| ระยะเรียงกันร้าว ≤ ขีดจำกัด | s = {temp_sp_cm:.1f} cm | {max_sp_temp / CM:,.1f} cm | {_s(sp_temp_ok)} |
-"""
-    )
-
-    # ------------------------------------------------------------------
-    # Verdict
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
+    st.subheader("ผลการตรวจสอบรวม")
     if passed:
-        st.success(
-            f"{PASS_TXT} — As หลักที่จัดให้ = {As_prov_main / 100.0:,.2f} cm²/m ≥ "
-            f"ที่ต้องการที่ควบคุม {As_design / 100.0:,.2f} cm²/m; "
-            f"ระยะเรียงอยู่ในเกณฑ์ทั้งหมด"
-        )
-
-        if not FONT_AVAILABLE:
-            st.warning(font_status_message())
-
-        pdf_bytes = generate_stair_report(
-            {
-                "L": L, "T": T, "R": R, "t": t,
-                "SDL_kgf": SDL_kgf, "LL_kgf": LL_kgf,
-                "covering": covering, "fc": fc, "fy": fy, "b": b,
-                "project": get_project_info(),
-            },
-            {
-                "theta_deg": math.degrees(theta),
-                "SW_kgf": SW_kgf, "DL_kgf": DL_kgf, "wu_kgf": wu_kgf,
-                "Mu": Mu, "d": d,
-                "As_req": As_req, "As_min": As_min,
-                "main_size": main_size, "main_spacing": main_spacing,
-                "As_prov_main": As_prov_main, "max_sp_main": max_sp_main,
-                "temp_size": temp_size, "temp_spacing": temp_spacing,
-                "As_prov_temp": As_prov_temp, "max_sp_temp": max_sp_temp,
-                "section_img": section_img,
-                "status": "PASS",
-            },
-        )
-        st.download_button(
-            "ดาวน์โหลดรายงานการคำนวณ",
-            data=pdf_bytes,
-            file_name="stair_design_report.pdf",
-            mime="application/pdf",
-        )
+        st.success(f"{PASS_TXT} — ระยะเรียงเหล็กหลักและเหล็กกันร้าวผ่านเกณฑ์ "
+                   f"ACI 318M-08")
     else:
-        reasons = []
-        if not as_req_ok:
-            reasons.append(
-                f"As หลัก {As_prov_main / 100.0:,.2f} < "
-                f"ที่ต้องการ {As_req / 100.0:,.2f} cm²/m"
-            )
-        if not as_min_ok:
-            reasons.append(
-                f"As หลัก {As_prov_main / 100.0:,.2f} < "
-                f"As,min {As_min / 100.0:,.2f} cm²/m"
-            )
-        if not temp_min_ok:
-            reasons.append(
-                f"As กันร้าว {As_prov_temp / 100.0:,.2f} < "
-                f"As,min {As_min / 100.0:,.2f} cm²/m"
-            )
-        if not sp_main_ok:
-            reasons.append(
-                f"ระยะเรียงหลัก {main_sp_cm:.1f} > สูงสุด {max_sp_main / CM:,.1f} cm"
-            )
-        if not sp_temp_ok:
-            reasons.append(
-                f"ระยะเรียงกันร้าว {temp_sp_cm:.1f} > สูงสุด {max_sp_temp / CM:,.1f} cm"
-            )
-        st.error(f"{FAIL_TXT} — " + "; ".join(reasons))
+        fails = []
+        if not main_ok:
+            fails.append(f"ระยะเรียงเหล็กหลัก S = {S_main:,.1f} cm "
+                         f"(เกณฑ์ 7.5–{s_max_main:,.1f} cm)")
+        if not temp_ok:
+            fails.append(f"ระยะเรียงเหล็กกันร้าว S = {S_temp:,.1f} cm "
+                         f"(เกณฑ์ 7.5–{s_max_temp:,.1f} cm)")
+        st.error(f"{FAIL_TXT} — " + "; ".join(fails))
+
+    # ------------------------------------------------------------------
+    render_report_expander(
+        key="stair_straight", filename="stair_design_report.pdf",
+        title="การออกแบบบันไดคอนกรีตเสริมเหล็ก (ACI 318M-08)",
+        params=[
+            ("ลูกตั้ง R", R, "cm", 1), ("ลูกนอน T", T, "cm", 1),
+            ("จำนวนขั้น N", f"{N} ขั้น"),
+            ("ความกว้างบันได W", W_m, "m", 2),
+            ("ช่วงพาดในแนวราบ Lx = N·T", Lx, "m", 2),
+            ("มุมลาดเอียง θ", math.degrees(theta), "องศา", 2),
+            ("ความหนาท้องบันได t", t, "cm", 1),
+            ("ระยะหุ้มคอนกรีต", cov, "cm", 1),
+            ("f'c", fc, "ksc", 0), ("fy", fy, "ksc", 0),
+            ("SDL", SDL, "kgf/m²", 0), ("LL", LL, "kgf/m²", 0),
+            ("DL รวม", DL, "kgf/m²", 1),
+            ("น้ำหนักบรรทุกประลัย Wu", Wu, "kgf/m²", 1),
+            ("โมเมนต์ประลัย Mu = Wu·Lx²/8", Mu, "kgf-m", 0),
+            ("เหล็กเสริมหลัก", f"{main_size} @ {S_main:.1f} cm"),
+            ("เหล็กกันร้าว", f"{temp_size} @ {S_temp:.1f} cm"),
+        ],
+        checks=[
+            ("ระยะเรียงเหล็กหลัก (S ≤ min(3t,45))", f"{S_main:.1f} cm",
+             f"{s_max_main:.1f} cm", main_ok),
+            ("ระยะเรียงเหล็กกันร้าว (S ≤ min(5t,45))", f"{S_temp:.1f} cm",
+             f"{s_max_temp:.1f} cm", temp_ok),
+            ("As เหล็กหลักที่จัดให้ ≥ ที่ต้องการ",
+             f"{Asp_main:.2f} cm²/m", f"{As_main:.2f} cm²/m",
+             Asp_main >= As_main - 1e-6),
+        ],
+        figures=[("รูปด้านบันได (Side Elevation)", section_img)],
+        status=passed,
+        summary=("ระยะเรียงเหล็กหลักและเหล็กกันร้าวผ่านเกณฑ์ ACI 318M-08"
+                 if passed else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 if __name__ == "__main__":

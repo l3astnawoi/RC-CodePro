@@ -198,6 +198,11 @@ class _Sheet(FPDF):
     project_info = None
 
     def header(self):
+        # brand line — same on every page
+        self.set_font(_FONT, "B", SZ_META)
+        self.set_text_color(90, 90, 90)
+        self.cell(0, 6, _t("RC CodePro — Structural Calculation Report"),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="R")
         _project_header(self, self.project_info)
         self.set_font(_FONT, "B", SZ_TITLE)
         self.set_text_color(0, 0, 0)
@@ -215,7 +220,7 @@ class _Sheet(FPDF):
         self.cell(
             0, 8,
             _t(f"จัดทำเมื่อ {date.today().isoformat()}   ·   "
-               f"ACI 318M-08 (หน่วยเมตริก)   ·   หน้า {self.page_no()}"),
+               f"ACI 318M-08 (หน่วยเมตริก)   ·   หน้า {self.page_no()} / {{nb}}"),
             align="C",
         )
 
@@ -355,6 +360,143 @@ def _image_section(pdf, buf, title="รายละเอียดหน้า�
         pass
 
 
+# ---------------------------------------------------------------------------
+# Generic, reusable report engine
+#   build_report(title=..., project_name=..., engineer=...,
+#                params=[(label, value[, unit]), ...],
+#                checks=[(name, demand, capacity, ok), ...],
+#                figures=Figure | BytesIO | [Figure | (caption, Figure), ...],
+#                status=bool|"PASS"|"FAIL", summary=str) -> bytes
+# Any structural module (Beam / Column / Slab / Footing) can call this with
+# its own dictionaries — no per-element PDF formatting code.
+# ---------------------------------------------------------------------------
+
+_CHK_COL = (74.0, 44.0, 44.0)          # Check | Demand | Capacity  (Status = rest)
+
+
+def _fig_to_buf(obj, dpi=200):
+    """A Matplotlib Figure *or* a BytesIO -> a 0-seeked PNG BytesIO (hi-res).
+
+    The Figure is rendered at ``dpi`` and closed; a BytesIO is returned as-is.
+    Returns ``None`` when nothing usable is supplied.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, BytesIO):
+        try:
+            obj.seek(0)
+        except Exception:
+            return None
+        return obj
+    if hasattr(obj, "savefig"):                       # a Matplotlib Figure
+        buf = BytesIO()
+        try:
+            obj.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(obj)
+            except Exception:
+                pass
+        except Exception:
+            return None
+        buf.seek(0)
+        return buf
+    return None
+
+
+def _checks_table(pdf, checks):
+    """Section 2 body — a 4-column Demand / Capacity / Status table."""
+    pdf.set_font(_FONT, "B", SZ_ROW)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_fill_color(238, 240, 244)
+    heads = ("รายการตรวจสอบ", "ความต้องการ (Demand)", "กำลัง (Capacity)",
+             "สถานะ")
+    for w, txt in zip(_CHK_COL, heads):
+        pdf.cell(w, LH_ROW, _t(f" {txt}"), fill=True)
+    pdf.cell(0, LH_ROW, _t(f" {heads[3]}"), fill=True,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    all_ok = True
+    for row in checks:
+        name, demand, cap, ok = (list(row) + [None, None, None])[:4]
+        all_ok = all_ok and bool(ok)
+        y0 = pdf.get_y()
+        pdf.set_font(_FONT, "", SZ_ROW)
+        pdf.set_text_color(45, 45, 45)
+        pdf.cell(_CHK_COL[0], LH_ROW, _t(f"  {name}"))
+        pdf.cell(_CHK_COL[1], LH_ROW,
+                 _t(demand if isinstance(demand, str) else _fmt(demand)))
+        pdf.cell(_CHK_COL[2], LH_ROW,
+                 _t(cap if isinstance(cap, str) else _fmt(cap)))
+        pdf.set_font(_FONT, "B", SZ_ROW)
+        pdf.set_text_color(*((0, 130, 0) if ok else (190, 0, 0)))
+        pdf.cell(0, LH_ROW, _t("ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_draw_color(226, 226, 226)
+        pdf.set_line_width(0.15)
+        pdf.line(pdf.l_margin, y0 + LH_ROW, pdf.w - pdf.r_margin, y0 + LH_ROW)
+    return all_ok
+
+
+def build_report(*, title, project_name="", engineer="", location="-",
+                 params=None, checks=None, figures=None,
+                 status=None, summary=None):
+    """Assemble a generic A4 RC calculation report and return PDF bytes.
+
+    See the module-level comment for the argument shapes.  ``status`` defaults
+    to the AND of every ``checks`` row when omitted.
+    """
+    info = {
+        "project_name": str(project_name or "-"),
+        "location": str(location or "-"),
+        "engineer": str(engineer or "-"),
+        "date": date.today().isoformat(),
+    }
+    pdf = _new_sheet(str(title), info)
+
+    # -- Section 1 : Design parameters --------------------------------------
+    if params:
+        _section(pdf, "ข้อมูลป้อนเข้า / Design Parameters")
+        for item in params:
+            item = list(item)
+            label = item[0]
+            value = item[1] if len(item) > 1 else "-"
+            unit = item[2] if len(item) > 2 else ""
+            nd = item[3] if len(item) > 3 else (
+                0 if isinstance(value, str) else 2)
+            _row(pdf, label, value, unit, nd=nd)
+
+    # -- Section 2 : Engineering checks (Demand vs Capacity + status) ------
+    checks_ok = True
+    if checks:
+        _section(pdf, "การตรวจสอบทางวิศวกรรม / Engineering Checks")
+        checks_ok = _checks_table(pdf, checks)
+
+    # -- Section 3 : Detailing figures ------------------------------------
+    figs = figures if isinstance(figures, list) else (
+        [] if figures is None else [figures])
+    for f in figs:
+        if isinstance(f, tuple) and len(f) == 2 and isinstance(f[0], str):
+            caption, obj = f
+        else:
+            caption, obj = "รายละเอียดการเสริมเหล็ก (Detailing)", f
+        buf = _fig_to_buf(obj)
+        if buf is not None:
+            _image_section(pdf, buf, title=caption)
+
+    # -- Verdict ---------------------------------------------------------
+    if status is None:
+        passed = checks_ok
+    elif isinstance(status, bool):
+        passed = status
+    else:
+        passed = str(status).strip().upper() in ("PASS", "OK", "TRUE")
+    _result_block(pdf, passed, "PASS" if passed else "FAIL", summary)
+
+    return _to_bytes(pdf)
+
+
 def _governing_as(r):
     if r("As_req") is not None and r("As_min") is not None:
         return max(r("As_req"), r("As_min"))
@@ -393,48 +535,78 @@ PILECAP_TITLE = "การออกแบบฐานรากเสาเข็
 
 
 def generate_beam_report(inputs, results):
-    """สร้างใบคำนวณการออกแบบคานและคืนค่าเป็นสตริงไบต์ (bytes)."""
+    """ใบคำนวณการออกแบบคาน (หน้าตัด) — การดัดโมเมนต์บวก/ลบ + แรงเฉือน (MKS)."""
     g = inputs.get
     r = results.get
 
     status_text = _status_text(results)
     passed = status_text == "PASS"
-    gov = _governing_as(r)
 
     pdf = _new_sheet(BEAM_TITLE, inputs.get("project"))
 
     _section(pdf, _S_INPUT)
-    _row(pdf, "โมเมนต์ประลัย Mu", _kgfm(g("Mu")), "kgf-m", nd=0)
-    _row(pdf, "ความกว้างหน้าตัด b", _cm(g("b")), "cm", nd=2)
-    _row(pdf, "ความลึกหน้าตัด h", _cm(g("h")), "cm", nd=2)
+    _row(pdf, "ความกว้างคาน b", _cm(g("b")), "cm", nd=1)
+    _row(pdf, "ความลึกคาน h", _cm(g("h")), "cm", nd=1)
+    _row(pdf, "ระยะหุ้มคอนกรีต", _cm(g("covering")), "cm", nd=1)
     _row(pdf, "กำลังอัดคอนกรีต f'c", _ksc(g("fc")), "ksc", nd=0)
-    _row(pdf, "กำลังครากเหล็กเสริม fy", _ksc(g("fy")), "ksc", nd=0)
-    _row(pdf, "ระยะหุ้มคอนกรีต", _cm(g("covering")), "cm", nd=2)
+    _row(pdf, "กำลังครากเหล็กหลัก fy", _ksc(g("fy")), "ksc", nd=0)
+    _row(pdf, "กำลังครากเหล็กปลอก fyv", g("fyv_ksc"), "ksc", nd=0)
+    _row(pdf, "โมเมนต์บวก +Mu (กลางช่วง)", g("Mu_pos_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "โมเมนต์ลบ -Mu (ที่ฐานรองรับ)", g("Mu_neg_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "แรงเฉือนประลัย Vu", g("Vu_kgf"), "kgf", nd=0)
 
-    _section(pdf, _S_STEPS)
-    _row(pdf, "ความลึกประสิทธิผล d", _cm(r("d")), "cm", nd=2)
-    _row(pdf, "พื้นที่เหล็กที่ต้องการ As,required", _cm2(r("As_req")), "cm2", nd=2)
-    _row(pdf, "พื้นที่เหล็กขั้นต่ำ As,min", _cm2(r("As_min")), "cm2", nd=2)
-    _row(pdf, "As ที่ต้องการที่ควบคุม", _cm2(gov), "cm2", nd=2)
-    _row(pdf, "ขนาดเหล็กเสริมที่เลือก", r("rebar_size"))
-    _row(pdf, "จำนวนเส้น", r("qty"))
+    _section(pdf, "การดัด — เหล็กบน (Negative Moment)")
+    _row(pdf, "เหล็กบน — จำนวน x ขนาด",
+         f"{_fmt(r('top_qty'), 0)} - {_fmt(r('top_size'))}")
+    _row(pdf, "ความลึกประสิทธิผล d_top", r("d_top_cm"), "cm", nd=2)
+    _row(pdf, "As ที่จัดให้ (บน)", r("As_top_cm2"), "cm2", nd=2)
+    _row(pdf, "a = As fy / (0.85 f'c b)", r("a_top_cm"), "cm", nd=2)
+    _row(pdf, "Mn = As fy (d - a/2)", r("Mn_top_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "phi*Mn = 0.90 Mn", r("phiMn_top_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "As,min", r("As_min_top_cm2"), "cm2", nd=2)
+    _row(pdf, "phi*Mn >= |-Mu|", _chk(r("top_strength_ok")))
+    _row(pdf, "As >= As,min", _chk(r("top_min_ok")))
 
-    _image_section(pdf, r("section_img"))
+    _section(pdf, "การดัด — เหล็กล่าง (Positive Moment)")
+    _row(pdf, "เหล็กล่าง — จำนวน x ขนาด",
+         f"{_fmt(r('bot_qty'), 0)} - {_fmt(r('bot_size'))}")
+    _row(pdf, "ความลึกประสิทธิผล d_bot", r("d_bot_cm"), "cm", nd=2)
+    _row(pdf, "As ที่จัดให้ (ล่าง)", r("As_bot_cm2"), "cm2", nd=2)
+    _row(pdf, "a = As fy / (0.85 f'c b)", r("a_bot_cm"), "cm", nd=2)
+    _row(pdf, "Mn = As fy (d - a/2)", r("Mn_bot_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "phi*Mn = 0.90 Mn", r("phiMn_bot_kgfm"), "kgf-m", nd=0)
+    _row(pdf, "As,min", r("As_min_bot_cm2"), "cm2", nd=2)
+    _row(pdf, "phi*Mn >= +Mu", _chk(r("bot_strength_ok")))
+    _row(pdf, "As >= As,min", _chk(r("bot_min_ok")))
+
+    _section(pdf, "แรงเฉือน (Shear)")
+    _row(pdf, "เหล็กปลอก — ขนาด @ ระยะเรียง S",
+         f"{_fmt(r('stir_size'))} @ {_fmt(r('stir_sp_cm'), 1)} cm")
+    _row(pdf, "ความลึกประสิทธิผล d = min(d_top, d_bot)", r("d_v_cm"), "cm", nd=2)
+    _row(pdf, "Av (ปลอก 2 ขา)", r("Av_cm2"), "cm2", nd=2)
+    _row(pdf, "Vc = 0.53 sqrt(f'c) b d", r("Vc_kgf"), "kgf", nd=0)
+    _row(pdf, "Vs = Av fyv d / S", r("Vs_kgf"), "kgf", nd=0)
+    _row(pdf, "Vs,max = 2.1 sqrt(f'c) b d", r("Vs_max_kgf"), "kgf", nd=0)
+    _row(pdf, "phi*Vn = 0.75 (Vc + Vs)", r("phiVn_kgf"), "kgf", nd=0)
+    _row(pdf, "ระยะเรียงปลอกสูงสุด s_max", r("s_max_cm"), "cm", nd=1)
+    _row(pdf, "phi*Vn >= Vu", _chk(r("shear_strength_ok")))
+    _row(pdf, "S <= s_max", _chk(r("shear_spacing_ok")))
+
+    _image_section(pdf, r("section_img"),
+                   title="รายละเอียดคาน (Cross-Section + Side Elevation)")
 
     _section(pdf, _S_CONCL)
-    _row(pdf, "พื้นที่เหล็กที่จัดให้ As,provided", _cm2(r("As_prov")), "cm2", nd=2)
-    if gov is not None and r("As_prov") is not None:
-        rel = ">=" if passed else "<"
-        _row(pdf, "การตรวจสอบ", f"As ที่จัดให้ {rel} As ที่ต้องการที่ควบคุม")
-
-    summary = None
-    if gov is not None and r("As_prov") is not None:
-        summary = (
-            f"As ที่จัดให้ = {_f2(_cm2(r('As_prov')))} cm2 เทียบกับ "
-            f"As ที่ต้องการที่ควบคุม = {_f2(_cm2(gov))} cm2 "
-            f"(As,required = {_f2(_cm2(r('As_req')))} cm2, "
-            f"As,min = {_f2(_cm2(r('As_min')))} cm2)."
-        )
+    _row(pdf, "เหล็กบน — โมเมนต์ลบ (Top Steel)", _chk(r("top_ok")))
+    _row(pdf, "เหล็กล่าง — โมเมนต์บวก (Bottom Steel)", _chk(r("bottom_ok")))
+    _row(pdf, "เหล็กปลอก — แรงเฉือน (Stirrups)", _chk(r("shear_ok")))
+    summary = (
+        f"เหล็กบน: phi*Mn = {_fmt(r('phiMn_top_kgfm'), 0)} vs |-Mu| = "
+        f"{_fmt(g('Mu_neg_kgfm'), 0)} kgf-m ({_chk(r('top_ok'))}).  "
+        f"เหล็กล่าง: phi*Mn = {_fmt(r('phiMn_bot_kgfm'), 0)} vs +Mu = "
+        f"{_fmt(g('Mu_pos_kgfm'), 0)} kgf-m ({_chk(r('bottom_ok'))}).  "
+        f"แรงเฉือน: phi*Vn = {_fmt(r('phiVn_kgf'), 0)} vs Vu = "
+        f"{_fmt(g('Vu_kgf'), 0)} kgf ({_chk(r('shear_ok'))})."
+    )
     _result_block(pdf, passed, status_text, summary)
 
     return _to_bytes(pdf)

@@ -9,8 +9,9 @@ import math
 import streamlit as st
 
 from utils.aci_318m import phi, rebars, bar_area
-from utils.drawing import draw_slab_strip, draw_twoway_slab_plan
-from utils.project import get_project_info
+from utils.drawing import (draw_slab_strip, draw_twoway_slab_plan,
+                           draw_slab_plan, fig_to_png_buf)
+from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_slab_report,
     generate_twoway_slab_report,
@@ -67,12 +68,298 @@ UNDER_CONSTRUCTION = "กำลังอยู่ระหว่างการ�
 def render_slab_module():
     slab_type = st.selectbox("เลือกประเภทพื้น (Slab Type)", SLAB_TYPES,
                              key="slab_type")
-    if slab_type == "One-way Slab (พื้นทางเดียว)":
-        _render_one_way_slab()
-    elif slab_type == "Two-way Slab (พื้นสองทาง)":
-        _render_two_way_slab()
+    if slab_type in ("One-way Slab (พื้นทางเดียว)",
+                     "Two-way Slab (พื้นสองทาง)"):
+        _render_slab_design()
     else:
         st.info(UNDER_CONSTRUCTION)
+
+
+def _as_flexure_ksc(Mu_kgfm, b_cm, d_cm, fc_ksc, fy_ksc):
+    """Singly-reinforced tension-controlled As (cm2) for a strip ``b_cm``
+    wide, all inputs in MKS (kgf-m, cm, ksc).  Returns (As_cm2, feasible)."""
+    if d_cm <= 0.0 or Mu_kgfm <= 0.0:
+        return 0.0, True
+    Rn = (Mu_kgfm * 100.0) / (phi["flexure"] * b_cm * d_cm ** 2)   # ksc
+    disc = 1.0 - 2.0 * Rn / (0.85 * fc_ksc)
+    if disc < 0.0:
+        return None, False
+    rho = (0.85 * fc_ksc / fy_ksc) * (1.0 - math.sqrt(disc))
+    return rho * b_cm * d_cm, True
+
+
+def _spacing_for(As_bar_cm2, As_req_cm2, s_max_cm):
+    """Bar spacing (cm, rounded down to 2.5 cm) that delivers ``As_req`` per
+    metre with a bar of area ``As_bar``; capped at ``s_max``.
+    Returns (S_cm, As_prov_cm2_per_m)."""
+    if As_req_cm2 <= 1.0e-9:
+        S = s_max_cm
+    else:
+        S_req = As_bar_cm2 * 100.0 / As_req_cm2
+        S = min(math.floor(S_req / 2.5) * 2.5, s_max_cm)
+        S = max(S, 2.5)
+    return S, As_bar_cm2 * 100.0 / S
+
+
+SLAB_BAR_SIZES = ["DB10", "DB12", "DB16", "DB20", "DB25"]
+
+
+def _render_slab_design():
+    st.title("การออกแบบพื้น (Slab — ทางเดียว / สองทาง อัตโนมัติ)")
+    st.caption("จำแนกประเภทพื้นจากอัตราส่วน m = Lx/Ly, คำนวณโมเมนต์ต่อแถบกว้าง "
+               "1 เมตร, เหล็กเสริมหลัก และเหล็กกันร้าว/อุณหภูมิ ตามมาตรฐาน "
+               "ACI 318M-08 — หน่วยเมตริก (cm, kgf, kgf-m, ksc, kgf/m²)")
+
+    b = 100.0        # cm — a 1 m wide strip
+
+    # ------------------------------------------------------------------
+    # 1. Dimensions
+    # ------------------------------------------------------------------
+    with st.expander("ขนาดพื้น (Slab Dimensions)", expanded=True):
+        d1, d2 = st.columns(2)
+        with d1:
+            Lx = st.number_input("ช่วงสั้น Lx (m)", min_value=0.5, value=4.0,
+                                 step=0.05, format="%.2f", key="sd_Lx")
+        with d2:
+            Ly = st.number_input("ช่วงยาว Ly (m)", min_value=0.5, value=5.0,
+                                 step=0.05, format="%.2f", key="sd_Ly")
+    if Ly < Lx:
+        Lx, Ly = Ly, Lx
+        st.info("สลับค่าให้ Lx เป็นช่วงที่สั้นกว่าโดยอัตโนมัติ")
+
+    # ------------------------------------------------------------------
+    # 2. Section & Material
+    # ------------------------------------------------------------------
+    with st.expander("หน้าตัดและวัสดุ (Section & Material)", expanded=True):
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            t_cm = st.number_input("ความหนาพื้น t (cm)", min_value=8.0,
+                                   value=12.0, step=0.5, format="%.1f",
+                                   key="sd_t")
+        with s2:
+            cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=1.0,
+                                     value=2.0, step=0.5, format="%.1f",
+                                     key="sd_cov")
+        with s3:
+            fc_ksc = st.number_input("f'c (ksc)", min_value=180, value=240,
+                                     step=10, format="%d", key="sd_fc")
+        with s4:
+            fy_ksc = st.number_input("fy (ksc)", min_value=2400, value=4000,
+                                     step=100, format="%d", key="sd_fy")
+
+    # ------------------------------------------------------------------
+    # 3. Loads  (self-weight auto from 2400 kg/m3)
+    # ------------------------------------------------------------------
+    with st.expander("แรงกระทำ (Loads)", expanded=True):
+        l1, l2 = st.columns(2)
+        with l1:
+            SDL = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
+                                  min_value=0.0, value=150.0, step=10.0,
+                                  key="sd_sdl")
+        with l2:
+            LL = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m²)", min_value=0.0,
+                                 value=300.0, step=50.0, key="sd_ll")
+
+    # ------------------------------------------------------------------
+    # 4. Reinforcement
+    # ------------------------------------------------------------------
+    with st.expander("เหล็กเสริม (Reinforcement)", expanded=True):
+        r1, r2 = st.columns(2)
+        with r1:
+            main_size = st.selectbox("เหล็กเสริมหลัก — ขนาด", SLAB_BAR_SIZES,
+                                     index=SLAB_BAR_SIZES.index("DB12"),
+                                     key="sd_msz")
+        with r2:
+            temp_size = st.selectbox("เหล็กกันร้าว/อุณหภูมิ — ขนาด",
+                                     SLAB_BAR_SIZES,
+                                     index=SLAB_BAR_SIZES.index("DB10"),
+                                     key="sd_tsz")
+
+    # ---- MKS working values -----------------------------------------
+    t, cov = float(t_cm), float(cov_cm)
+    fc, fy = float(fc_ksc), float(fy_ksc)
+    db_main = float(main_size[2:]) / 10.0      # cm
+    db_temp = float(temp_size[2:]) / 10.0      # cm
+    Ab_main = bar_area(main_size) / 100.0      # cm2 per bar
+    Ab_temp = bar_area(temp_size) / 100.0
+
+    # ---- Type classification :  m = Lx / Ly ------------------------
+    m_ratio = Lx / Ly if Ly > 0 else 0.0
+    two_way = m_ratio > 0.5
+    type_txt = "พื้นสองทาง (Two-Way)" if two_way else "พื้นทางเดียว (One-Way)"
+
+    # ---- Loads : self-weight + factored ---------------------------
+    sw = (t / 100.0) * CONC_DENSITY_KG          # kgf/m2  (t in m x 2400)
+    DL = sw + SDL
+    Wu = 1.2 * DL + 1.6 * LL                    # kgf/m2  (= kgf/m on a 1 m strip)
+
+    # ---- Design moments per 1 m strip (kgf-m) --------------------
+    if two_way:
+        k = Lx ** 4 + Ly ** 4
+        Mux = Wu * Lx ** 2 * (Ly ** 4 / k) / 8.0      # short span
+        Muy = Wu * Ly ** 2 * (Lx ** 4 / k) / 8.0      # long span
+        Mu_main = max(Mux, Muy)
+    else:
+        Mux = Wu * Lx ** 2 / 8.0                      # simple-span strip
+        Muy = 0.0
+        Mu_main = Mux
+
+    # ---- Effective depths (cm) --------------------------------------
+    d_x = t - cov - db_main / 2.0                     # short / bottom layer
+    d_y = d_x - db_main                               # long / upper layer
+    if d_y <= 0.0:
+        st.error("ความลึกประสิทธิผลไม่พอ — เพิ่มความหนาพื้น t หรือลดขนาดเหล็ก")
+        return
+
+    # ---- Temperature / shrinkage steel  (ACI 318M-08 7.12) --------
+    temp_ratio = _temp_steel_ratio(fy * KSC_TO_MPA)
+    As_temp_min = temp_ratio * b * t                  # cm2 / m
+
+    # ---- Flexural steel per direction -----------------------------
+    As_x_req, feas_x = _as_flexure_ksc(Mux, b, d_x, fc, fy)
+    As_y_req, feas_y = _as_flexure_ksc(Muy, b, d_y, fc, fy)
+    feasible = feas_x and (feas_y or not two_way)
+    if not feasible:
+        st.error("หน้าตัดบางเกินไปสำหรับการดัด — เพิ่มความหนาพื้น t หรือ f'c")
+        return
+    As_x = max(As_x_req or 0.0, As_temp_min)
+    As_y = max(As_y_req or 0.0, As_temp_min) if two_way else As_temp_min
+    As_main = As_x if (not two_way or As_x >= As_y) else As_y
+
+    # ---- Spacing checks ------------------------------------------
+    s_max_main = min(3.0 * t, 45.0)                   # ACI 13.3.2 / 10.5.4
+    s_max_temp = min(5.0 * t, 45.0)                   # ACI 7.12.2.2
+    S_x, Asp_x = _spacing_for(Ab_main, As_x, s_max_main)
+    S_y, Asp_y = _spacing_for(Ab_main, As_y, s_max_main) if two_way else (None, None)
+    S_temp, Asp_temp = _spacing_for(Ab_temp, As_temp_min, s_max_temp)
+
+    S_main = S_x if (not two_way) else max(S_x, S_y)
+    main_ok = (7.5 <= S_x <= s_max_main) and (
+        (not two_way) or (7.5 <= S_y <= s_max_main))
+    temp_ok = 7.5 <= S_temp <= s_max_temp
+
+    passed = main_ok and temp_ok
+
+    # ------------------------------------------------------------------
+    # Calculation breakdown
+    # ------------------------------------------------------------------
+    st.subheader("ขั้นตอนการคำนวณ")
+    _mrow = (f"| โมเมนต์ Mu (ทางสั้น / ทางยาว) | {Mux:,.0f} / {Muy:,.0f} kgf-m |"
+             if two_way else
+             f"| โมเมนต์ Mu = Wu·Lx²/8 (ต่อแถบ 1 ม.) | **{Mux:,.0f} kgf-m** |")
+    st.markdown(
+        f"""
+| รายการ | ค่า |
+|---|---|
+| อัตราส่วน m = Lx / Ly = {Lx:.2f} / {Ly:.2f} | **{m_ratio:.3f}** → {type_txt} |
+| น้ำหนักพื้นเอง sw = (t/100)·2400 | {sw:,.1f} kgf/m² |
+| น้ำหนักบรรทุกประลัย Wu = 1.2(sw+SDL) + 1.6·LL | **{Wu:,.1f} kgf/m²** |
+{_mrow}
+| ความลึกประสิทธิผล d (ทางสั้น / ทางยาว) | {d_x:,.2f} / {d_y:,.2f} cm |
+| เหล็กกันร้าว/อุณหภูมิ As,temp = {temp_ratio:.4f}·b·t | **{As_temp_min:,.2f} cm²/ม.** |
+| As เหล็กหลักที่ต้องการ (ควบคุมด้วย As,temp) | ทางสั้น {As_x:,.2f} · ทางยาว {As_y:,.2f} cm²/ม. |
+| ระยะเรียงสูงสุด — เหล็กหลัก min(3t, 45) | {s_max_main:,.1f} cm |
+| ระยะเรียงสูงสุด — เหล็กกันร้าว min(5t, 45) | {s_max_temp:,.1f} cm |
+| ระยะเรียงที่จัดให้ — เหล็กหลัก ({main_size}) | ทางสั้น {S_x:,.1f} cm{f' · ทางยาว {S_y:,.1f} cm' if two_way else ''} |
+| ระยะเรียงที่จัดให้ — เหล็กกันร้าว ({temp_size}) | {S_temp:,.1f} cm |
+"""
+    )
+
+    # ------------------------------------------------------------------
+    # Result cards
+    # ------------------------------------------------------------------
+    st.subheader("ผลการตรวจสอบ")
+    c_type, c_main, c_temp = st.columns(3)
+    with c_type:
+        st.markdown("#### ประเภทพื้น")
+        st.metric("m = Lx/Ly", f"{m_ratio:.3f}")
+        st.info(type_txt + ("  (m > 0.5)" if two_way else "  (m ≤ 0.5)"))
+    with c_main:
+        st.markdown("#### ระยะเรียงเหล็กหลัก")
+        st.metric(f"S / s_max (cm) — {main_size}",
+                  f"{S_main:,.1f} / {s_max_main:,.1f}")
+        (st.success if main_ok else st.error)(
+            (PASS_TXT if main_ok else FAIL_TXT) + " — เหล็กหลัก")
+        if not main_ok:
+            st.warning("ระยะเรียงชิด/ห่างเกินเกณฑ์ — ปรับขนาดเหล็ก หรือความหนา")
+    with c_temp:
+        st.markdown("#### ระยะเรียงเหล็กกันร้าว")
+        st.metric(f"S / s_max (cm) — {temp_size}",
+                  f"{S_temp:,.1f} / {s_max_temp:,.1f}")
+        (st.success if temp_ok else st.error)(
+            (PASS_TXT if temp_ok else FAIL_TXT) + " — เหล็กกันร้าว")
+
+    # ------------------------------------------------------------------
+    # CAD plan drawing
+    # ------------------------------------------------------------------
+    try:
+        if two_way:
+            main_lbl = (f"Main-สั้น: {main_size} @ {S_x:.0f} cm  ·  "
+                        f"Main-ยาว: {main_size} @ {S_y:.0f} cm")
+            temp_lbl = f"Main (ยาว): {main_size} @ {S_y:.0f} cm"
+            grid_temp_sp = S_y
+        else:
+            main_lbl = f"Main: {main_size} @ {S_x:.0f} cm"
+            temp_lbl = f"Temp: {temp_size} @ {S_temp:.0f} cm"
+            grid_temp_sp = S_temp
+        fig = draw_slab_plan(
+            Lx, Ly, main_label=main_lbl, main_sp_cm=S_x,
+            temp_label=temp_lbl, temp_sp_cm=grid_temp_sp, two_way=two_way)
+        st.pyplot(fig, use_container_width=True)
+        st.caption("แปลนพื้น + ตะแกรงเหล็กล่าง (Slab Plan — Bottom Reinforcement)")
+        section_img = fig_to_png_buf(fig)
+    except Exception as exc:  # pragma: no cover
+        section_img = None
+        st.warning(f"ไม่สามารถสร้างภาพแปลนได้: {exc}")
+
+    # ------------------------------------------------------------------
+    # Overall verdict
+    # ------------------------------------------------------------------
+    st.subheader("ผลการตรวจสอบรวม")
+    if passed:
+        st.success(f"{PASS_TXT} — {type_txt}: ระยะเรียงเหล็กหลักและเหล็กกันร้าว"
+                   f"ผ่านเกณฑ์ ACI 318M-08")
+    else:
+        fails = []
+        if not main_ok:
+            fails.append(f"ระยะเรียงเหล็กหลัก S = {S_main:,.1f} cm "
+                         f"(เกณฑ์ 7.5–{s_max_main:,.1f} cm)")
+        if not temp_ok:
+            fails.append(f"ระยะเรียงเหล็กกันร้าว S = {S_temp:,.1f} cm "
+                         f"(เกณฑ์ 7.5–{s_max_temp:,.1f} cm)")
+        st.error(f"{FAIL_TXT} — " + "; ".join(fails))
+
+    # ------------------------------------------------------------------
+    _sp_txt = (f"สั้น {S_x:.1f} / ยาว {S_y:.1f} cm" if two_way
+               else f"{S_x:.1f} cm")
+    render_report_expander(
+        key="slab_design", filename="slab_design_report.pdf",
+        title="การออกแบบพื้นคอนกรีตเสริมเหล็ก (ACI 318M-08)",
+        params=[
+            ("ประเภทพื้น", type_txt), ("m = Lx/Ly", f"{m_ratio:.3f}"),
+            ("ช่วงสั้น Lx", Lx, "m", 2), ("ช่วงยาว Ly", Ly, "m", 2),
+            ("ความหนาพื้น t", t, "cm", 1), ("ระยะหุ้มคอนกรีต", cov, "cm", 1),
+            ("f'c", fc, "ksc", 0), ("fy", fy, "ksc", 0),
+            ("น้ำหนักพื้นเอง sw", sw, "kgf/m²", 1),
+            ("SDL", SDL, "kgf/m²", 0), ("LL", LL, "kgf/m²", 0),
+            ("น้ำหนักบรรทุกประลัย Wu", Wu, "kgf/m²", 1),
+            ("โมเมนต์ Mu (สั้น/ยาว)",
+             f"{Mux:,.0f}" + (f" / {Muy:,.0f}" if two_way else "") + " kgf-m"),
+            ("เหล็กเสริมหลัก", f"{main_size} @ {_sp_txt}"),
+            ("เหล็กกันร้าว/อุณหภูมิ", f"{temp_size} @ {S_temp:.1f} cm"),
+        ],
+        checks=[
+            ("ระยะเรียงเหล็กหลัก (S ≤ min(3t,45))", _sp_txt,
+             f"{s_max_main:.1f} cm", main_ok),
+            ("ระยะเรียงเหล็กกันร้าว (S ≤ min(5t,45))", f"{S_temp:.1f} cm",
+             f"{s_max_temp:.1f} cm", temp_ok),
+            ("เหล็กกันร้าว/อุณหภูมิขั้นต่ำ As,temp",
+             f"{As_temp_min:,.2f} cm²/m", "ρ·b·t", True),
+        ],
+        figures=[("แปลนพื้น + ตะแกรงเหล็กล่าง (Slab Plan)", section_img)],
+        status=passed,
+        summary=(f"{type_txt}: ระยะเรียงเหล็กหลักและเหล็กกันร้าวผ่านเกณฑ์"
+                 if passed else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 def _render_two_way_slab():

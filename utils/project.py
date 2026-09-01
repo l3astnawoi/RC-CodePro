@@ -60,3 +60,55 @@ def get_project_info():
         "engineer": _g("proj_engineer"),
         "date": date_str,
     }
+
+
+def render_report_expander(*, key, filename, title, params, checks=None,
+                           figures=None, status=None, summary=None):
+    """Standard bottom-of-page report block shared by every design module.
+
+    Renders an expander '📄 ออกรายงานรายการคำนวณ (Generate Report)' with
+    Project Name / Engineer Name text inputs and a ``st.download_button``
+    that builds the PDF via ``reports.pdf_generator.build_report``.
+
+    key      : unique per module (widget-key prefix)
+    filename : downloaded file name, e.g. "beam_report.pdf"
+    title    : report title line
+    params   : list of (label, value[, unit[, nd]])
+    checks   : list of (name, demand, capacity, ok)
+    figures  : Matplotlib Figure / BytesIO / list thereof (Section 3)
+    status   : bool | "PASS" | "FAIL" (defaults to AND of the checks)
+    summary  : optional one-line conclusion sentence
+    """
+    from reports.pdf_generator import (build_report, FONT_AVAILABLE,
+                                       font_status_message)
+
+    with st.expander("📄 ออกรายงานรายการคำนวณ (Generate Report)",
+                     expanded=False):
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            pname = st.text_input(
+                "ชื่อโครงการ (Project Name)",
+                value=str(st.session_state.get("proj_name",
+                                               DEFAULTS["proj_name"])),
+                key=f"{key}_rep_pname")
+        with cc2:
+            peng = st.text_input(
+                "วิศวกรผู้ออกแบบ (Engineer Name)",
+                value=str(st.session_state.get("proj_engineer",
+                                               DEFAULTS["proj_engineer"])),
+                key=f"{key}_rep_eng")
+
+        if not FONT_AVAILABLE:
+            st.warning(font_status_message())
+        try:
+            pdf_bytes = build_report(
+                title=title, project_name=pname, engineer=peng,
+                location=str(st.session_state.get("proj_location", "-")),
+                params=params, checks=checks, figures=figures,
+                status=status, summary=summary)
+            st.download_button(
+                "⬇️  ดาวน์โหลดรายงาน (.pdf)", data=pdf_bytes,
+                file_name=filename, mime="application/pdf",
+                key=f"{key}_rep_dl")
+        except Exception as exc:  # pragma: no cover
+            st.error(f"สร้างรายงานไม่สำเร็จ: {exc}")

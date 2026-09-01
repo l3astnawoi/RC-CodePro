@@ -117,6 +117,13 @@ def _save_buf(fig, *, dpi=150, tight=True):
     return buf
 
 
+def fig_to_png_buf(fig, *, dpi=150):
+    """Render a Matplotlib figure to a PNG ``BytesIO`` (0-seeked) and close
+    it.  For helpers that hand back a live ``Figure`` (so the caller can
+    ``st.pyplot`` it) but still need a buffer for the PDF report."""
+    return _save_buf(fig, dpi=dpi, tight=True)
+
+
 def _apply_true_scale(ax, x_lo, x_hi, y_lo, y_hi):
     """Lock an axis to a data window at strict 1:1 (equal) aspect and hide it.
 
@@ -377,6 +384,116 @@ def draw_beam_3_sect(b_mm, h_mm, covering_mm, left_rebar, mid_rebar,
 
 
 # ===========================================================================
+# Beam — commercial-grade detail : cross-section + side elevation
+# ===========================================================================
+def draw_beam_detail(b_mm, h_mm, covering_mm, *, top_size="DB16", top_qty=2,
+                     bot_size="DB16", bot_qty=3, stirrup_size="DB10",
+                     stirrup_sp_cm=15.0, seg_len_mm=None):
+    """Two-view RC beam detail.
+
+    View 1 (Cross-Section): concrete b x h, a closed rectangular stirrup
+    offset by the cover, top + bottom longitudinal bars as dots in the
+    stirrup corners, b / h dimension lines and bar / stirrup call-outs.
+
+    View 2 (Side Elevation): a beam segment with the longitudinal top and
+    bottom bars as horizontal lines and the stirrups as vertical lines
+    spaced at S, with an "S = ... cm" dimension.
+
+    Blue = main longitudinal bars, green = stirrups.  Returns the live
+    Matplotlib ``Figure`` (use ``st.pyplot`` to show it, or
+    ``fig_to_png_buf`` for the PDF report).
+    """
+    b = float(b_mm)
+    h = float(h_mm)
+    cov = float(covering_mm)
+    sd = float(str(stirrup_size)[2:] or 10.0)          # stirrup bar dia (mm)
+    td = float(str(top_size)[2:] or 16.0)              # top bar dia (mm)
+    btd = float(str(bot_size)[2:] or 16.0)             # bottom bar dia (mm)
+    ntop = max(int(top_qty), 2)
+    nbot = max(int(bot_qty), 2)
+    sp = max(float(stirrup_sp_cm), 1.0) * 10.0         # spacing S (mm)
+    seg = float(seg_len_mm) if seg_len_mm else max(5.0 * sp, 2.4 * h, 900.0)
+
+    _MAIN = "#1f5fd0"      # blue  — main longitudinal bars
+    _STIR = "#2e7d32"      # green — stirrups
+
+    fig, (axc, axe) = plt.subplots(
+        1, 2, figsize=(9.6, 5.6), gridspec_kw={"width_ratios": [1.0, 2.3]})
+
+    # bar-row positions (shared by both views) --------------------------
+    bx0 = cov + sd + max(td, btd) / 2.0
+    bx1 = b - cov - sd - max(td, btd) / 2.0
+    if bx1 <= bx0:
+        bx0 = bx1 = b / 2.0
+    y_top = h - cov - sd - td / 2.0
+    y_bot = cov + sd + btd / 2.0
+
+    # ---------------- View 1 : Cross-Section --------------------------
+    axc.add_patch(patches.Rectangle((0, 0), b, h, edgecolor=_CONC_EDGE,
+                                    facecolor=_CONC_FILL, linewidth=1.8))
+    axc.add_patch(patches.Rectangle((cov, cov), b - 2.0 * cov, h - 2.0 * cov,
+                                    edgecolor=_STIR, facecolor="none",
+                                    linewidth=1.8, joinstyle="miter",
+                                    zorder=4))
+    for cx in _even_spread(bx0, bx1, ntop):
+        axc.add_patch(patches.Circle((cx, y_top), td / 2.0, facecolor=_MAIN,
+                                     edgecolor=_MAIN, zorder=6))
+    for cx in _even_spread(bx0, bx1, nbot):
+        axc.add_patch(patches.Circle((cx, y_bot), btd / 2.0, facecolor=_MAIN,
+                                     edgecolor=_MAIN, zorder=6))
+    _hdim(axc, 0.0, b, -0.22 * h, 0.0, f"$b = {_cm(b)}$ cm", fs=_DIM_FS)
+    _vdim(axc, 0.0, h, b + 0.24 * b, b, f"$h = {_cm(h)}$ cm", fs=_DIM_FS)
+    _callout(axc, (bx1, y_top), (b + 0.34 * b, h * 1.05),
+             f"{ntop} - {top_size}", color=_MAIN, ha="left", fs=_NOTE_FS)
+    _callout(axc, (bx0, y_bot), (-0.34 * b, -0.16 * h),
+             f"{nbot} - {bot_size}", color=_MAIN, ha="right", fs=_NOTE_FS)
+    _callout(axc, (cov, h * 0.55), (-0.34 * b, h * 0.72),
+             f"{stirrup_size} @ {_cm(sp)} cm", color=_STIR, ha="right",
+             fs=_NOTE_FS)
+    axc.set_xlim(-0.60 * b, 1.75 * b)
+    axc.set_ylim(-0.34 * h, 1.30 * h)
+    axc.set_aspect("equal", adjustable="box")
+    axc.axis("off")
+    axc.set_title("Cross-Section", fontsize=_TITLE_FS)
+
+    # ---------------- View 2 : Side Elevation ------------------------
+    axe.add_patch(patches.Rectangle((0, 0), seg, h, edgecolor=_CONC_EDGE,
+                                    facecolor=_CONC_FILL, linewidth=1.8))
+    for yy in (y_bot, y_top):
+        axe.plot([cov, seg - cov], [yy, yy], color=_MAIN, linewidth=2.2,
+                 zorder=5)
+    xs_stir = []
+    x = cov
+    while x <= seg - cov + 1.0e-6:
+        axe.plot([x, x], [cov, h - cov], color=_STIR, linewidth=1.5, zorder=4)
+        xs_stir.append(x)
+        x += sp
+    _vdim(axe, 0.0, h, seg + 0.07 * seg, seg, f"$h = {_cm(h)}$ cm",
+          fs=_DIM_FS)
+    if len(xs_stir) >= 2:
+        _hdim(axe, xs_stir[0], xs_stir[1], -0.24 * h, 0.0,
+              f"S = {_cm(sp)} cm", fs=_DIM_FS)
+    _callout(axe, (0.5 * seg, y_top), (0.5 * seg, h * 1.22),
+             f"{ntop} - {top_size} (บน)", color=_MAIN, ha="center",
+             fs=_NOTE_FS)
+    _callout(axe, (0.62 * seg, y_bot), (0.62 * seg, -0.44 * h),
+             f"{nbot} - {bot_size} (ล่าง)", color=_MAIN, ha="center",
+             fs=_NOTE_FS)
+    _callout(axe, (xs_stir[len(xs_stir) // 2] if xs_stir else 0.4 * seg,
+                   h * 0.5), (-0.02 * seg, h * 1.22),
+             f"{stirrup_size} @ {_cm(sp)} cm", color=_STIR, ha="center",
+             fs=_NOTE_FS)
+    axe.set_xlim(-0.12 * seg, 1.22 * seg)
+    axe.set_ylim(-0.60 * h, 1.46 * h)
+    axe.set_aspect("equal", adjustable="box")
+    axe.axis("off")
+    axe.set_title("Side Elevation", fontsize=_TITLE_FS)
+
+    fig.tight_layout(pad=1.0)
+    return fig
+
+
+# ===========================================================================
 # Column — cross-section + P-M interaction diagram
 # ===========================================================================
 def draw_column_pm_and_section(b_mm, h_mm, cover_to_bar_mm, bar_dia_mm, bar_xy,
@@ -444,6 +561,164 @@ def draw_column_pm_and_section(b_mm, h_mm, cover_to_bar_mm, bar_dia_mm, bar_xy,
 
     fig.tight_layout(pad=0.8)
     return _save_buf(fig)
+
+
+# ===========================================================================
+# Column — CAD cross-section (tied rectangular / spiral circular)
+# ===========================================================================
+def _perimeter_pts(x0, y0, x1, y1, n):
+    """``n`` points equally spaced around the rectangle perimeter, starting
+    at (x0, y0).  n = 4 -> the corners; n = 8 -> corners + edge midpoints."""
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    seg = [x1 - x0, y1 - y0, x1 - x0, y1 - y0]
+    per = sum(seg) or 1.0
+    out = []
+    for i in range(max(int(n), 1)):
+        d = per * i / n
+        for s in range(4):
+            if d <= seg[s] or s == 3:
+                (ax, ay), (bx, by) = corners[s], corners[(s + 1) % 4]
+                t = (d / seg[s]) if seg[s] else 0.0
+                out.append((ax + (bx - ax) * t, ay + (by - ay) * t))
+                break
+            d -= seg[s]
+    return out
+
+
+def draw_column_detail(*, shape="rect", b_mm=400.0, h_mm=400.0, D_mm=None,
+                       covering_mm=40.0, main_size="DB20", n_bars=8,
+                       tie_size="DB10", tie_sp_cm=15.0):
+    """RC column cross-section (plan view).
+
+    shape = "rect"  -> b x h grey box, closed green tie, main bars spread
+                       around the perimeter inside the tie.
+    shape = "circ"  -> grey circle Ø D, dashed green spiral, main bars in a
+                       polar array inside the spiral.
+
+    Blue = main bars, green = tie / spiral.  Returns a Matplotlib ``Figure``.
+    """
+    circ = str(shape).lower().startswith("c")
+    cov = float(covering_mm)
+    md = float(str(main_size)[2:] or 20.0)        # main bar dia (mm)
+    tdd = float(str(tie_size)[2:] or 10.0)        # tie / spiral dia (mm)
+    n = max(int(n_bars), 4)
+    _MAIN, _TIE = "#1f5fd0", "#2e7d32"
+
+    fig, ax = plt.subplots(figsize=(5.2, 5.4))
+
+    if circ:
+        D = float(D_mm if D_mm else b_mm)
+        R = D / 2.0
+        ax.add_patch(patches.Circle((0, 0), R, edgecolor=_CONC_EDGE,
+                                    facecolor=_CONC_FILL, linewidth=1.8))
+        R_sp = R - cov - tdd / 2.0                # spiral centre-line radius
+        ax.add_patch(patches.Circle((0, 0), R_sp, edgecolor=_TIE,
+                                    facecolor="none", linewidth=1.8,
+                                    linestyle=(0, (5, 4)), zorder=4))
+        R_b = R - cov - tdd - md / 2.0            # main-bar circle radius
+        for k in range(n):
+            ang = math.pi / 2.0 - 2.0 * math.pi * k / n
+            ax.add_patch(patches.Circle((R_b * math.cos(ang),
+                                         R_b * math.sin(ang)), md / 2.0,
+                                        facecolor=_MAIN, edgecolor=_MAIN,
+                                        zorder=6))
+        _hdim(ax, -R, R, -R - 0.24 * D, -R, f"$D = {_cm(D)}$ cm", fs=_DIM_FS)
+        _callout(ax, (0.0, R_b), (1.05 * D, 0.9 * D), f"{n} - {main_size}",
+                 color=_MAIN, ha="left", fs=_NOTE_FS)
+        _callout(ax, (R_sp * 0.71, R_sp * 0.71), (-1.1 * D, 0.9 * D),
+                 f"{tie_size} เกลียว @ {tie_sp_cm:.0f} cm", color=_TIE,
+                 ha="right", fs=_NOTE_FS)
+        lim = 0.85 * D
+        ax.set_xlim(-lim, 1.55 * lim)
+        ax.set_ylim(-1.15 * lim, 1.15 * lim)
+        ax.set_title("Column Cross-Section (Circular / Spiral)",
+                     fontsize=_TITLE_FS)
+    else:
+        b, h = float(b_mm), float(h_mm)
+        ax.add_patch(patches.Rectangle((-b / 2.0, -h / 2.0), b, h,
+                                       edgecolor=_CONC_EDGE,
+                                       facecolor=_CONC_FILL, linewidth=1.8))
+        tx0, ty0 = -b / 2.0 + cov, -h / 2.0 + cov
+        tx1, ty1 = b / 2.0 - cov, h / 2.0 - cov
+        ax.add_patch(patches.Rectangle((tx0, ty0), tx1 - tx0, ty1 - ty0,
+                                       edgecolor=_TIE, facecolor="none",
+                                       linewidth=1.8, joinstyle="miter",
+                                       zorder=4))
+        off = tdd / 2.0 + md / 2.0                # bar centre inset from tie
+        for (bx, by) in _perimeter_pts(tx0 + off, ty0 + off,
+                                       tx1 - off, ty1 - off, n):
+            ax.add_patch(patches.Circle((bx, by), md / 2.0, facecolor=_MAIN,
+                                        edgecolor=_MAIN, zorder=6))
+        _hdim(ax, -b / 2.0, b / 2.0, -h / 2.0 - 0.22 * h, -h / 2.0,
+              f"$b = {_cm(b)}$ cm", fs=_DIM_FS)
+        _vdim(ax, -h / 2.0, h / 2.0, b / 2.0 + 0.24 * b, b / 2.0,
+              f"$h = {_cm(h)}$ cm", fs=_DIM_FS)
+        _callout(ax, (tx1 - off, ty1 - off), (b * 0.9, h * 1.0),
+                 f"{n} - {main_size}", color=_MAIN, ha="left", fs=_NOTE_FS)
+        _callout(ax, (tx0, 0.0), (-b * 0.95, h * 0.62),
+                 f"{tie_size} @ {tie_sp_cm:.0f} cm", color=_TIE, ha="right",
+                 fs=_NOTE_FS)
+        ax.set_xlim(-1.05 * b, 1.55 * b)
+        ax.set_ylim(-0.95 * h, 1.35 * h)
+        ax.set_title("Column Cross-Section (Rectangular / Tied)",
+                     fontsize=_TITLE_FS)
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.axis("off")
+    fig.tight_layout(pad=0.8)
+    return fig
+
+
+# ===========================================================================
+# Slab — CAD top plan with the bottom reinforcement grid
+# ===========================================================================
+def draw_slab_plan(Lx_m, Ly_m, *, main_label="Main", main_sp_cm=15.0,
+                   temp_label="Temp", temp_sp_cm=20.0, two_way=False):
+    """Top plan of an Lx (short, X) x Ly (long, Y) slab with its bottom bars.
+
+    Main bars run in the short (X) direction -> drawn as lines parallel to
+    X, stepped along Y at ``main_sp_cm``.  Temperature bars run in Y ->
+    lines parallel to Y, stepped along X at ``temp_sp_cm``.
+
+    Blue = main bars; green = temperature bars (a 2nd blue when two_way).
+    Returns a Matplotlib ``Figure``.
+    """
+    Lx = float(Lx_m) * 100.0                       # cm
+    Ly = float(Ly_m) * 100.0
+    msp = max(float(main_sp_cm), 1.0)
+    tsp = max(float(temp_sp_cm), 1.0)
+    _MAIN = "#1f5fd0"
+    _TEMP = "#3f7fd8" if two_way else "#2e7d32"
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.4))
+    ax.add_patch(patches.Rectangle((0.0, 0.0), Lx, Ly, edgecolor=_CONC_EDGE,
+                                   facecolor=_CONC_FILL, linewidth=1.8))
+    edge = min(Lx, Ly) * 0.045
+    yy = edge
+    while yy <= Ly - edge + 1.0e-6:
+        ax.plot([edge, Lx - edge], [yy, yy], color=_MAIN, lw=0.9, zorder=3)
+        yy += msp
+    xx = edge
+    while xx <= Lx - edge + 1.0e-6:
+        ax.plot([xx, xx], [edge, Ly - edge], color=_TEMP, lw=0.9, zorder=3)
+        xx += tsp
+
+    _hdim(ax, 0.0, Lx, -0.13 * Ly, 0.0, f"$L_x = {Lx / 100.0:.2f}$ m",
+          fs=_DIM_FS)
+    _vdim(ax, 0.0, Ly, Lx + 0.15 * Lx, Lx, f"$L_y = {Ly / 100.0:.2f}$ m",
+          fs=_DIM_FS)
+    _callout(ax, (Lx * 0.5, Ly - edge - msp), (Lx * 0.5, Ly * 1.20),
+             main_label, color=_MAIN, ha="center", fs=_NOTE_FS)
+    _callout(ax, (edge + tsp, Ly * 0.5), (-0.30 * Lx, Ly * 0.5),
+             temp_label, color=_TEMP, ha="right", fs=_NOTE_FS)
+
+    ax.set_xlim(-0.44 * Lx, 1.34 * Lx)
+    ax.set_ylim(-0.30 * Ly, 1.36 * Ly)
+    ax.set_aspect("equal", adjustable="box")
+    ax.axis("off")
+    ax.set_title("Slab Plan — Bottom Reinforcement", fontsize=_TITLE_FS)
+    fig.tight_layout(pad=0.8)
+    return fig
 
 
 # ===========================================================================
@@ -1169,3 +1444,79 @@ def draw_u_stair_elevation(T_cm, R_cm, N, L_land_m, t_cm, *, span_m=None,
            l=0.24, r=0.14, b=0.48, t=0.28)
     fig.tight_layout(pad=0.5)
     return _save_buf(fig)
+
+
+# ===========================================================================
+# Straight stair — CAD side elevation (inclined one-way slab)
+# ===========================================================================
+def draw_stair_elevation(*, R_cm, T_cm, N, t_cm, covering_cm,
+                         main_label="Main", temp_label="Temp"):
+    """2D side elevation of a straight stair flight.
+
+    Top surface  = a zig-zag of ``N`` steps (riser R, tread T).
+    Bottom (waist) = a straight line parallel to the pitch line, offset ``t``
+    perpendicular to the slope.
+    Main rebar  = blue line parallel to the waist, offset by the cover.
+    Temp rebar  = green dots spread along the main rebar.
+    Dimension   = the horizontal span Lx.  Returns a Matplotlib ``Figure``.
+    """
+    R = float(R_cm)
+    T = float(T_cm)
+    n = max(int(N), 1)
+    t = float(t_cm)
+    cov = float(covering_cm)
+    _MAIN, _TEMP = "#1f5fd0", "#2e7d32"
+
+    th = math.atan2(R, T)
+    s, c = math.sin(th), math.cos(th)
+    Lx, Ht = n * T, n * R
+
+    # top zig-zag (walking surface)
+    top = [(0.0, 0.0)]
+    for i in range(n):
+        top.append((i * T, (i + 1) * R))
+        top.append(((i + 1) * T, (i + 1) * R))
+
+    # waist soffit — pitch line (0,0)->(Lx,Ht) shifted perpendicular by t
+    px, py = s * t, -c * t
+    sof_a = (0.0 + px, 0.0 + py)
+    sof_b = (Lx + px, Ht + py)
+    outline = top + [sof_b, sof_a, (0.0, 0.0)]
+
+    fig, ax = plt.subplots(figsize=(8.0, 5.8))
+    ax.add_patch(patches.Polygon(outline, closed=True, edgecolor=_CONC_EDGE,
+                                 facecolor=_CONC_FILL, linewidth=1.8))
+
+    # main rebar: soffit line offset toward the concrete by cover + bar radius
+    md = 1.2
+    ox, oy = -s * (cov + md), c * (cov + md)
+    ra = (sof_a[0] + ox, sof_a[1] + oy)
+    rb = (sof_b[0] + ox, sof_b[1] + oy)
+    ax.plot([ra[0], rb[0]], [ra[1], rb[1]], color=_MAIN, linewidth=2.4,
+            zorder=5, solid_capstyle="round")
+    for k in range(n + 2):                    # temp bars end-on = green dots
+        f = k / (n + 1)
+        ax.plot([ra[0] + (rb[0] - ra[0]) * f], [ra[1] + (rb[1] - ra[1]) * f],
+                marker="o", ms=5.0, mfc=_TEMP, mec=_TEMP, zorder=6)
+
+    _hdim(ax, 0.0, Lx, -0.24 * Ht - t, py, f"$L_x = {Lx / 100.0:.2f}$ m",
+          fs=_DIM_FS)
+    _callout(ax, (0.5 * (ra[0] + rb[0]), 0.5 * (ra[1] + rb[1])),
+             (0.12 * Lx, 1.16 * Ht), main_label, color=_MAIN, ha="left",
+             fs=_NOTE_FS)
+    _callout(ax, (ra[0] + (rb[0] - ra[0]) * 0.72,
+                  ra[1] + (rb[1] - ra[1]) * 0.72),
+             (0.60 * Lx, -0.44 * Ht - t), temp_label, color=_TEMP,
+             ha="center", fs=_NOTE_FS)
+    ax.text(0.5 * Lx, Ht * 1.02,
+            f"N = {n} ขั้น · R {R:.1f} / T {T:.1f} cm · t {t:.0f} cm",
+            ha="center", va="bottom", fontsize=_NOTE_FS - 1.0,
+            color=_CONC_EDGE)
+
+    ax.set_xlim(-0.14 * Lx, 1.16 * Lx)
+    ax.set_ylim(-0.58 * Ht - t, 1.30 * Ht)
+    ax.set_aspect("equal", adjustable="box")
+    ax.axis("off")
+    ax.set_title("Stair Side Elevation", fontsize=_TITLE_FS)
+    fig.tight_layout(pad=0.8)
+    return fig

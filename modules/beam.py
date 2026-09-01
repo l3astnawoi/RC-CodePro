@@ -1,16 +1,18 @@
-"""Streamlit UI — RC beam flexural design to ACI 318M-08. Thai UI, cm / cm² display.
+"""Streamlit UI — RC beam design to ACI 318M-08. Thai UI.
 
-Singly-reinforced rectangular section: required tension steel vs. provided.
-UI inputs are in cm; converted to mm internally for the ACI calculations.
+* ``Beam Section`` — one rectangular section, flexure + shear, worked
+  strictly in MKS units (cm / kgf / kgf-m / ksc).
+* ``Beam 3 Sect`` — three critical sections (SI core, MKS display).
 """
 
 import math
 
 import streamlit as st
 
-from utils.aci_318m import phi, rebars, get_beta1, calc_As_min, bar_area, vc_beam
-from utils.drawing import draw_rc_section, draw_beam_3_sect
-from utils.project import get_project_info
+from utils.aci_318m import (phi, rebars, get_beta1, calc_As_min, bar_area,
+                            vc_beam, as_min_flexure_ksc, vc_beam_ksc)
+from utils.drawing import draw_beam_detail, draw_beam_3_sect, fig_to_png_buf
+from utils.project import get_project_info, render_report_expander
 from reports.pdf_generator import (
     generate_beam_report,
     generate_beam_3_sect_report,
@@ -29,6 +31,31 @@ STIRRUP_SIZES = ["RB9", "RB6", "DB10", "DB12"]
 
 PASS_TXT = "✅ ผ่านมาตรฐาน (PASS)"
 FAIL_TXT = "❌ ไม่ผ่าน (FAIL)"
+
+
+def _beta1_ksc(fc_ksc):
+    """Stress-block factor beta1 for f'c in ksc (ACI 318M-08 10.2.7.3, MKS
+    form): 0.85 up to 280 ksc, then -0.05 per 70 ksc, floor 0.65."""
+    if fc_ksc <= 280.0:
+        return 0.85
+    return max(0.65, 0.85 - 0.05 * (fc_ksc - 280.0) / 70.0)
+
+
+def _rho_max_ksc(fc_ksc, fy_ksc):
+    """Tension-controlled (net strain 0.005) reinforcement ratio, MKS."""
+    return (0.85 * _beta1_ksc(fc_ksc) * fc_ksc / fy_ksc
+            * 0.003 / (0.003 + 0.005))
+
+
+def _flex_ksc(As_cm2, fy_ksc, fc_ksc, b_cm, d_cm):
+    """Singly-reinforced flexural capacity of one steel layer, MKS.
+
+    Returns ``(a_cm, Mn_kgfm, phiMn_kgfm)`` with phi = 0.90 (tension-
+    controlled, ``phi['flexure']`` from utils.aci_318m).
+    """
+    a = As_cm2 * fy_ksc / (0.85 * fc_ksc * b_cm)          # cm
+    Mn = As_cm2 * fy_ksc * (d_cm - a / 2.0) / 100.0       # kgf-m
+    return a, Mn, phi["flexure"] * Mn
 
 
 def _required_as(Mu_kNm, b, d, fc, fy):
@@ -322,181 +349,289 @@ def _render_beam_3_sect():
 
 
 def _render_beam_section():
-    st.title("การออกแบบคาน")
-    st.caption("การดัด — หน้าตัดสี่เหลี่ยมเสริมเหล็กรับแรงดึงอย่างเดียว "
-               "ตามมาตรฐาน ACI 318M-08 (หน่วยเมตริก)")
+    st.title("การออกแบบคาน (หน้าตัดคาน — โมเมนต์บวก / ลบ)")
+    st.caption("ตรวจสอบการดัดพร้อมกัน: โมเมนต์บวก (กลางช่วง → เหล็กล่าง) และ "
+               "โมเมนต์ลบ (ที่ฐานรองรับ → เหล็กบน) รวมทั้งแรงเฉือน ตามมาตรฐาน "
+               "ACI 318M-08 — หน่วยเมตริก (cm, kgf, kgf-m, ksc)")
 
     # ------------------------------------------------------------------
-    # Inputs  (section dimensions in cm)
+    # 1. Section & Material
     # ------------------------------------------------------------------
-    st.subheader("ข้อมูลป้อนเข้า")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        Mu_kgfm = st.number_input("โมเมนต์ประลัย Mu (kgf-m)", min_value=0.0,
-                                  value=15300.0, step=100.0)
-        fc_ksc = st.number_input("กำลังอัดคอนกรีต f'c (ksc)", min_value=180,
-                                 value=240, step=10, format="%d")
-    with c2:
-        b_cm = st.number_input("ความกว้างหน้าตัด b (cm)", min_value=10.0,
-                               value=30.0, step=0.01, format="%.2f")
-        fy_ksc = st.number_input("กำลังครากเหล็กเสริม fy (ksc)", min_value=2800,
-                                 value=4000, step=100, format="%d")
-    with c3:
-        h_cm = st.number_input("ความลึกหน้าตัด h (cm)", min_value=15.0,
-                               value=55.0, step=0.01, format="%.2f")
-        covering_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=2.0,
-                                      value=4.0, step=0.01, format="%.2f")
-
-    # MKS -> SI for the ACI calculation core
-    b = b_cm * CM
-    h = h_cm * CM
-    covering = covering_cm * CM
-    fc = fc_ksc * KSC_TO_MPA
-    fy = fy_ksc * KSC_TO_MPA
-    Mu = Mu_kgfm * KGF_TO_KN                     # kgf-m -> kN.m
+    with st.expander("หน้าตัดและวัสดุ (Section & Material)", expanded=True):
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            b_cm = st.number_input("ความกว้างคาน b (cm)", min_value=15.0,
+                                   value=30.0, step=1.0, format="%.1f",
+                                   key="bs_b")
+            fc_ksc = st.number_input("กำลังอัดคอนกรีต f'c (ksc)",
+                                     min_value=180, value=240, step=10,
+                                     format="%d", key="bs_fc")
+        with m2:
+            h_cm = st.number_input("ความลึกคาน h (cm)", min_value=20.0,
+                                   value=55.0, step=1.0, format="%.1f",
+                                   key="bs_h")
+            fy_ksc = st.number_input("กำลังครากเหล็กหลัก fy (ksc)",
+                                     min_value=2400, value=4000, step=100,
+                                     format="%d", key="bs_fy")
+        with m3:
+            cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=2.0,
+                                     value=4.0, step=0.5, format="%.1f",
+                                     key="bs_cov")
+            fyv_ksc = st.number_input("กำลังครากเหล็กปลอก fyv (ksc)",
+                                      min_value=2400, value=2400, step=100,
+                                      format="%d", key="bs_fyv")
 
     # ------------------------------------------------------------------
-    # Reinforcement selection
+    # 2. Loads  — positive (mid-span) and negative (support) moment
     # ------------------------------------------------------------------
-    st.subheader("เหล็กเสริม")
-    r1, r2 = st.columns(2)
-    with r1:
-        rebar_size = st.selectbox("ขนาดเหล็กเสริม", TOP_BOT_SIZES,
-                                  index=TOP_BOT_SIZES.index("DB20"))
-    with r2:
-        qty = st.selectbox("จำนวนเส้น", list(range(2, 13)), index=1)
+    with st.expander("แรงกระทำ (Loads)", expanded=True):
+        l1, l2, l3 = st.columns(3)
+        with l1:
+            Mu_pos = st.number_input(
+                "โมเมนต์บวก +Mu (กลางช่วง, kgf-m)", min_value=0.0,
+                value=15300.0, step=100.0, key="bs_Mup",
+                help="ทำให้เกิดแรงดึงที่ด้านล่าง — ตรวจสอบด้วยเหล็กล่าง")
+        with l2:
+            Mu_neg = st.number_input(
+                "โมเมนต์ลบ −Mu (ที่ฐานรองรับ, kgf-m)", min_value=0.0,
+                value=18000.0, step=100.0, key="bs_Mun",
+                help="ทำให้เกิดแรงดึงที่ด้านบน — ตรวจสอบด้วยเหล็กบน (ใส่เป็นค่าสัมบูรณ์)")
+        with l3:
+            Vu = st.number_input("แรงเฉือนประลัย Vu (kgf)", min_value=0.0,
+                                 value=12000.0, step=100.0, key="bs_Vu")
+    Mu_neg = abs(Mu_neg)
 
-    rebar_dia = float(rebar_size[2:])
-    bar_area = rebars[rebar_size]
+    # ------------------------------------------------------------------
+    # 3. Reinforcement Input
+    # ------------------------------------------------------------------
+    with st.expander("เหล็กเสริม (Reinforcement)", expanded=True):
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            st.markdown("**เหล็กบน (Top Bars — รับ −Mu)**")
+            top_size = st.selectbox("ขนาด", TOP_BOT_SIZES,
+                                    index=TOP_BOT_SIZES.index("DB20"),
+                                    key="bs_tsz")
+            top_qty = int(st.number_input("จำนวนเส้น", min_value=2, value=4,
+                                          step=1, key="bs_tq"))
+        with r2:
+            st.markdown("**เหล็กล่าง (Bottom Bars — รับ +Mu)**")
+            bot_size = st.selectbox("ขนาด", TOP_BOT_SIZES,
+                                    index=TOP_BOT_SIZES.index("DB20"),
+                                    key="bs_bsz")
+            bot_qty = int(st.number_input("จำนวนเส้น", min_value=2, value=3,
+                                          step=1, key="bs_bq"))
+        with r3:
+            st.markdown("**เหล็กปลอก (Stirrups — รับ Vu)**")
+            stir_size = st.selectbox("ขนาด", STIRRUP_SIZES, index=0,
+                                     key="bs_ssz")
+            S = st.number_input("ระยะเรียง S (cm)", min_value=2.5, value=15.0,
+                                step=1.0, format="%.1f", key="bs_ssp")
 
-    # ------------------------------------------------------------------
-    # Effective depth  d = h - covering - stirrup - rebar_dia/2   (mm)
-    # ------------------------------------------------------------------
-    d = h - covering - STIRRUP_DIA - rebar_dia / 2.0
-    if d <= 0:
-        st.error("ความลึกประสิทธิผล d ≤ 0 — ตรวจสอบระยะหุ้ม ความลึกหน้าตัด "
-                 "หรือขนาดเหล็กเสริม")
+    # ---- MKS working values (cm / kgf / kgf-m / ksc) -----------------
+    b, h, cov = float(b_cm), float(h_cm), float(cov_cm)
+    fc, fy, fyv = float(fc_ksc), float(fy_ksc), float(fyv_ksc)
+    top_dia = float(top_size[2:]) / 10.0     # cm
+    bot_dia = float(bot_size[2:]) / 10.0     # cm
+    sdia = float(stir_size[2:]) / 10.0       # cm
+    Ab_top = bar_area(top_size) / 100.0      # cm2 per top bar
+    Ab_bot = bar_area(bot_size) / 100.0      # cm2 per bottom bar
+    Av = 2.0 * bar_area(stir_size) / 100.0   # cm2 (2-leg stirrup)
+
+    # effective depth to each layer
+    d_bot = h - cov - sdia - bot_dia / 2.0   # tension = bottom (+Mu)
+    d_top = h - cov - sdia - top_dia / 2.0   # tension = top    (-Mu)
+    if min(d_top, d_bot) <= 0.0:
+        st.error("ความลึกประสิทธิผล d ≤ 0 — ตรวจสอบ h ระยะหุ้ม หรือขนาดเหล็ก")
         return
 
-    As_req, Rn, rho, feasible = _required_as(Mu, b, d, fc, fy)
-    As_min = calc_As_min(fc, fy, b, d)
-    beta1 = get_beta1(fc)
-    As_prov = qty * bar_area
+    # ------------------------------------------------------------------
+    # Bottom bars vs positive moment
+    # ------------------------------------------------------------------
+    As_bot = bot_qty * Ab_bot
+    a_bot, Mn_bot, phiMn_bot = _flex_ksc(As_bot, fy, fc, b, d_bot)
+    As_min_bot = as_min_flexure_ksc(fc, fy, b, d_bot)
+    As_max_bot = _rho_max_ksc(fc, fy) * b * d_bot
+    bot_strength_ok = phiMn_bot >= Mu_pos
+    bot_min_ok = As_bot >= As_min_bot
+    bot_ductile_ok = As_bot <= As_max_bot
+    bottom_ok = bot_strength_ok and bot_min_ok
 
     # ------------------------------------------------------------------
-    # Calculation steps
+    # Top bars vs negative moment
     # ------------------------------------------------------------------
-    st.subheader("ขั้นตอนการคำนวณ")
+    As_top = top_qty * Ab_top
+    a_top, Mn_top, phiMn_top = _flex_ksc(As_top, fy, fc, b, d_top)
+    As_min_top = as_min_flexure_ksc(fc, fy, b, d_top)
+    As_max_top = _rho_max_ksc(fc, fy) * b * d_top
+    top_strength_ok = phiMn_top >= Mu_neg
+    top_min_ok = As_top >= As_min_top
+    top_ductile_ok = As_top <= As_max_top
+    top_ok = top_strength_ok and top_min_ok
+
+    # ------------------------------------------------------------------
+    # Shear — Vc = 0.53*sqrt(f'c)*b*d  (MKS).  Use the smaller effective
+    # depth of the two layers (conservative single value).
+    # ------------------------------------------------------------------
+    d_v = min(d_top, d_bot)
+    Vc = vc_beam_ksc(fc, b, d_v)                            # kgf
+    Vs = (Av * fyv * d_v / S) if S > 0.0 else 0.0           # kgf
+    Vs_max = 2.1 * math.sqrt(fc) * b * d_v                  # kgf
+    phiVn = phi["shear"] * (Vc + min(Vs, Vs_max))           # kgf
+    s_max = min(d_v / 2.0, 60.0)                            # cm
+    if Vs > 1.06 * math.sqrt(fc) * b * d_v:                 # dense-stirrup zone
+        s_max = min(d_v / 4.0, 30.0)
+    shear_strength_ok = phiVn >= Vu
+    shear_spacing_ok = S <= s_max
+    shear_vsmax_ok = Vs <= Vs_max
+    shear_ok = shear_strength_ok and shear_spacing_ok and shear_vsmax_ok
+
+    passed = top_ok and bottom_ok and shear_ok
+
+    # ------------------------------------------------------------------
+    # Calculation breakdown — both flexural layers side by side
+    # ------------------------------------------------------------------
+    st.subheader("ขั้นตอนการคำนวณ — การดัด (Flexure)")
+    st.markdown(
+        f"""
+| รายการ | เหล็กบน (−Mu) | เหล็กล่าง (+Mu) |
+|---|---|---|
+| เหล็กที่จัดให้ | {top_qty} - {top_size} | {bot_qty} - {bot_size} |
+| ความลึกประสิทธิผล d = h − cover − Ø_ปลอก − Ø/2 | {d_top:,.2f} cm | {d_bot:,.2f} cm |
+| As ที่จัดให้ | {As_top:,.2f} cm² | {As_bot:,.2f} cm² |
+| a = As·fy / (0.85·f'c·b) | {a_top:,.2f} cm | {a_bot:,.2f} cm |
+| Mn = As·fy·(d − a/2) | {Mn_top:,.0f} kgf-m | {Mn_bot:,.0f} kgf-m |
+| **φMn = {phi['flexure']:.2f}·Mn** | **{phiMn_top:,.0f} kgf-m** | **{phiMn_bot:,.0f} kgf-m** |
+| Mu ที่ต้องต้าน | {Mu_neg:,.0f} kgf-m | {Mu_pos:,.0f} kgf-m |
+| As,min = max(0.8√f'c/fy, 14/fy)·b·d | {As_min_top:,.2f} cm² | {As_min_bot:,.2f} cm² |
+| As,max (tension-controlled) | {As_max_top:,.2f} cm² | {As_max_bot:,.2f} cm² |
+"""
+    )
+
+    st.subheader("ขั้นตอนการคำนวณ — แรงเฉือน (Shear)")
     st.markdown(
         f"""
 | รายการ | ค่า |
 |---|---|
-| β1  (`get_beta1(fc)`) | {beta1:.4f} |
-| φ (การดัด) | {phi['flexure']:.2f} |
-| เส้นผ่านศูนย์กลางเหล็กหลัก | {rebar_dia:.1f} mm |
-| ความลึกประสิทธิผล d = h − covering − Ø_ปลอก − Ø_หลัก/2 | **{d / CM:,.2f} cm** |
-| Mu | {Mu * KN_TO_KGF:,.0f} kgf-m |
-| Rn = Mu / (φ·b·d²) | {Rn / KSC_TO_MPA:,.1f} ksc |
+| ความลึกประสิทธิผลสำหรับแรงเฉือน d = min(d_บน, d_ล่าง) | {d_v:,.2f} cm |
+| Vc = 0.53·√f'c·b·d | **{Vc:,.0f} kgf** |
+| Av (เหล็กปลอก 2 ขา, {stir_size}) | {Av:,.2f} cm² |
+| Vs = Av·fyv·d / S | **{Vs:,.0f} kgf** |
+| Vs,max = 2.1·√f'c·b·d | {Vs_max:,.0f} kgf |
+| φVn = {phi['shear']:.2f}·(Vc + Vs) | **{phiVn:,.0f} kgf** |
+| ระยะเรียงปลอกสูงสุด s_max = min(d/2, 60) cm | {s_max:,.1f} cm |
 """
     )
 
     # ------------------------------------------------------------------
-    # Visual detailing (b, h, covering are already in mm)
+    # Three status cards — Top steel / Bottom steel / Stirrups
+    # ------------------------------------------------------------------
+    st.subheader("ผลการตรวจสอบ")
+    t_col, b_col, s_col = st.columns(3)
+    with t_col:
+        st.markdown("#### เหล็กบน — โมเมนต์ลบ")
+        st.metric("φMn / |−Mu| (kgf-m)",
+                  f"{phiMn_top:,.0f} / {Mu_neg:,.0f}",
+                  delta=f"{phiMn_top - Mu_neg:,.0f}")
+        st.metric("As / As,min (cm²)", f"{As_top:,.2f} / {As_min_top:,.2f}")
+        (st.success if top_ok else st.error)(
+            (PASS_TXT if top_ok else FAIL_TXT) + " — เหล็กบน (Top Steel)")
+        if top_ok and not top_ductile_ok:
+            st.warning("As,บน > As,max — เสริมเหล็กมากเกินไป")
+    with b_col:
+        st.markdown("#### เหล็กล่าง — โมเมนต์บวก")
+        st.metric("φMn / +Mu (kgf-m)",
+                  f"{phiMn_bot:,.0f} / {Mu_pos:,.0f}",
+                  delta=f"{phiMn_bot - Mu_pos:,.0f}")
+        st.metric("As / As,min (cm²)", f"{As_bot:,.2f} / {As_min_bot:,.2f}")
+        (st.success if bottom_ok else st.error)(
+            (PASS_TXT if bottom_ok else FAIL_TXT) + " — เหล็กล่าง (Bottom Steel)")
+        if bottom_ok and not bot_ductile_ok:
+            st.warning("As,ล่าง > As,max — เสริมเหล็กมากเกินไป")
+    with s_col:
+        st.markdown("#### เหล็กปลอก — แรงเฉือน")
+        st.metric("φVn / Vu (kgf)", f"{phiVn:,.0f} / {Vu:,.0f}",
+                  delta=f"{phiVn - Vu:,.0f}")
+        st.metric("S / s_max (cm)", f"{S:,.1f} / {s_max:,.1f}")
+        (st.success if shear_ok else st.error)(
+            (PASS_TXT if shear_ok else FAIL_TXT) + " — เหล็กปลอก (Stirrups)")
+        if not shear_vsmax_ok:
+            st.warning("Vs > Vs,max — เพิ่มขนาดหน้าตัด (b·d)")
+
+    # ------------------------------------------------------------------
+    # CAD drawing — cross-section + side elevation (structure unchanged;
+    # top & bottom bars now reflect the verified dual-moment design)
     # ------------------------------------------------------------------
     section_img = None
     try:
-        section_img = draw_rc_section(
-            b, h, covering, rebar_dia, qty, section_type="beam",
-            bar_label=f"{qty} - {rebar_size}",
-            stirrup_label=f"ปลอก Ø{STIRRUP_DIA:.0f} mm")
-        st.image(section_img, caption="รายละเอียดหน้าตัด (Section Detailing)")
+        fig = draw_beam_detail(
+            b * CM, h * CM, cov * CM,
+            top_size=top_size, top_qty=top_qty,
+            bot_size=bot_size, bot_qty=bot_qty,
+            stirrup_size=stir_size, stirrup_sp_cm=S)
+        st.pyplot(fig, use_container_width=True)
+        st.caption("รายละเอียดคาน — หน้าตัด + รูปด้าน (Beam Detailing)")
+        section_img = fig_to_png_buf(fig)     # PNG buffer for the PDF report
     except Exception as exc:  # pragma: no cover - drawing must never break the page
-        st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
-
-    if not feasible:
-        st.error(
-            "หน้าตัดเล็กเกินไปสำหรับการเสริมเหล็กรับแรงดึงอย่างเดียว "
-            "(1 − 2·Rn/(0.85·f'c) < 0) — เพิ่ม b, h หรือ f'c"
-        )
-        st.markdown(
-            f"As,min = **{As_min / 100.0:,.2f} cm²**  ·  "
-            f"As ที่จัดให้ = {qty} × {rebar_size} = **{As_prov / 100.0:,.2f} cm²**"
-        )
-        st.error(f"{FAIL_TXT} — หน้าตัดไม่เพียงพอสำหรับการดัด")
-        return
-
-    As_design = max(As_req, As_min)
-    st.markdown(
-        f"""
-| รายการ | ค่า |
-|---|---|
-| ρ = 0.85·f'c/fy · (1 − √(1 − 2·Rn/0.85·f'c)) | {rho:.5f} |
-| **As ที่ต้องการ** = ρ·b·d | **{As_req / 100.0:,.2f} cm²** |
-| As,min = max(0.25√f'c/fy, 1.4/fy)·b·d | {As_min / 100.0:,.2f} cm² |
-| As ที่ต้องการที่ควบคุม = max(As, As,min) | **{As_design / 100.0:,.2f} cm²** |
-| พื้นที่เหล็ก 1 เส้น, {rebar_size} (Ø {rebar_dia:.1f} mm) | {bar_area / 100.0:,.2f} cm² |
-| **As ที่จัดให้** = {qty} × {bar_area / 100.0:,.2f} | **{As_prov / 100.0:,.2f} cm²** |
-"""
-    )
+        st.warning(f"ไม่สามารถสร้างภาพรายละเอียดได้: {exc}")
 
     # ------------------------------------------------------------------
-    # Verdict
+    # Overall verdict + report
     # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
-    ok_req = As_prov >= As_req
-    ok_min = As_prov >= As_min
-
-    if ok_req and ok_min:
-        st.success(
-            f"{PASS_TXT} — As ที่จัดให้ = {As_prov / 100.0:,.2f} cm² ≥ "
-            f"As ที่ต้องการที่ควบคุม = {As_design / 100.0:,.2f} cm² "
-            f"(As,required = {As_req / 100.0:,.2f} cm², "
-            f"As,min = {As_min / 100.0:,.2f} cm²)"
-        )
-
-        if not FONT_AVAILABLE:
-            st.warning(font_status_message())
-
-        pdf_bytes = generate_beam_report(
-            {
-                "Mu": Mu,
-                "b": b,
-                "h": h,
-                "fc": fc,
-                "fy": fy,
-                "covering": covering,
-                "project": get_project_info(),
-            },
-            {
-                "d": d,
-                "As_req": As_req,
-                "As_min": As_min,
-                "rebar_size": rebar_size,
-                "qty": qty,
-                "As_prov": As_prov,
-                "section_img": section_img,
-                "status": "PASS",
-            },
-        )
-        st.download_button(
-            "ดาวน์โหลดรายงานการคำนวณ",
-            data=pdf_bytes,
-            file_name="beam_design_report.pdf",
-            mime="application/pdf",
-        )
+    st.subheader("ผลการตรวจสอบรวม")
+    if passed:
+        st.success(f"{PASS_TXT} — ผ่านทั้งเหล็กบน (−Mu), เหล็กล่าง (+Mu) และแรงเฉือน")
     else:
-        reasons = []
-        if not ok_req:
-            reasons.append(
-                f"As ที่จัดให้ < As,required "
-                f"({As_prov / 100.0:,.2f} < {As_req / 100.0:,.2f} cm²)"
-            )
-        if not ok_min:
-            reasons.append(
-                f"As ที่จัดให้ < As,min "
-                f"({As_prov / 100.0:,.2f} < {As_min / 100.0:,.2f} cm²)"
-            )
-        st.error(f"{FAIL_TXT} — " + "; ".join(reasons))
+        fails = []
+        if not top_strength_ok:
+            fails.append(f"เหล็กบน φMn < |−Mu| ({phiMn_top:,.0f} < {Mu_neg:,.0f} kgf-m)")
+        if not top_min_ok:
+            fails.append(f"เหล็กบน As < As,min ({As_top:,.2f} < {As_min_top:,.2f} cm²)")
+        if not bot_strength_ok:
+            fails.append(f"เหล็กล่าง φMn < +Mu ({phiMn_bot:,.0f} < {Mu_pos:,.0f} kgf-m)")
+        if not bot_min_ok:
+            fails.append(f"เหล็กล่าง As < As,min ({As_bot:,.2f} < {As_min_bot:,.2f} cm²)")
+        if not shear_strength_ok:
+            fails.append(f"φVn < Vu ({phiVn:,.0f} < {Vu:,.0f} kgf)")
+        if not shear_spacing_ok:
+            fails.append(f"S > s_max ({S:,.1f} > {s_max:,.1f} cm)")
+        if not shear_vsmax_ok:
+            fails.append("Vs > Vs,max")
+        st.error(f"{FAIL_TXT} — " + "; ".join(fails))
+
+    # ------------------------------------------------------------------
+    render_report_expander(
+        key="beam_sec", filename="beam_design_report.pdf",
+        title="การออกแบบคานคอนกรีตเสริมเหล็ก (ACI 318M-08)",
+        params=[
+            ("ความกว้างคาน b", b, "cm", 1), ("ความลึกคาน h", h, "cm", 1),
+            ("ระยะหุ้มคอนกรีต", cov, "cm", 1),
+            ("f'c", fc, "ksc", 0), ("fy เหล็กหลัก", fy, "ksc", 0),
+            ("fyv เหล็กปลอก", fyv, "ksc", 0),
+            ("โมเมนต์บวก +Mu", Mu_pos, "kgf-m", 0),
+            ("โมเมนต์ลบ −Mu", Mu_neg, "kgf-m", 0),
+            ("แรงเฉือน Vu", Vu, "kgf", 0),
+            ("เหล็กบน", f"{top_qty} - {top_size}"),
+            ("เหล็กล่าง", f"{bot_qty} - {bot_size}"),
+            ("เหล็กปลอก", f"{stir_size} @ {S:.1f} cm"),
+        ],
+        checks=[
+            ("การดัด — เหล็กบน (φMn ≥ |−Mu|)", f"{Mu_neg:,.0f} kgf-m",
+             f"{phiMn_top:,.0f} kgf-m", top_strength_ok),
+            ("เหล็กบน As ≥ As,min", f"{As_top:,.2f} cm²",
+             f"{As_min_top:,.2f} cm²", top_min_ok),
+            ("การดัด — เหล็กล่าง (φMn ≥ +Mu)", f"{Mu_pos:,.0f} kgf-m",
+             f"{phiMn_bot:,.0f} kgf-m", bot_strength_ok),
+            ("เหล็กล่าง As ≥ As,min", f"{As_bot:,.2f} cm²",
+             f"{As_min_bot:,.2f} cm²", bot_min_ok),
+            ("แรงเฉือน (φVn ≥ Vu)", f"{Vu:,.0f} kgf",
+             f"{phiVn:,.0f} kgf", shear_strength_ok),
+            ("ระยะเรียงปลอก (S ≤ s_max)", f"{S:.1f} cm",
+             f"{s_max:.1f} cm", shear_spacing_ok),
+        ],
+        figures=[("รายละเอียดคาน (Cross-Section + Side Elevation)", section_img)],
+        status=passed,
+        summary=("ผ่านทั้งการดัดเหล็กบน/ล่าง และแรงเฉือน" if passed
+                 else "มีรายการไม่ผ่าน — โปรดตรวจสอบตารางการตรวจสอบ"))
 
 
 # Backwards-compatible alias
