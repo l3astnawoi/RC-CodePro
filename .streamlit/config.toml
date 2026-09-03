@@ -1,38 +1,44 @@
+# RC CodePro — Dark Engineering theme (STEP 2 UI foundation)
+# Colour / radius / font-size / heading scale are driven from here (native,
+# upgrade-safe). utils/ui.py + assets/rc_theme.css add only what config
+# cannot express.
+
 [theme]
 base = "dark"
-primaryColor = "#3b82f6"
-backgroundColor = "#0f172a"
-secondaryBackgroundColor = "#1e293b"
-textColor = "#f8fafc"
-borderColor = "#334155"
-linkColor = "#60a5fa"
+primaryColor = "#2f81f7"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#e6edf3"
+borderColor = "#2a3441"
+linkColor = "#4d94f9"
 linkUnderline = false
-baseRadius = "10px"
-buttonRadius = "8px"
+baseRadius = "6px"
+buttonRadius = "6px"
 showWidgetBorder = true
 showSidebarBorder = true
-baseFontSize = 15
-font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+baseFontSize = 14
+headingFontSizes = ["24px", "20px", "17px", "15px", "14px", "13px"]
 headingFontWeights = [700, 600, 600, 600, 500, 500]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
 
-greenColor = "#22c55e"
-redColor = "#ef4444"
-orangeColor = "#f59e0b"
-yellowColor = "#eab308"
-blueColor = "#3b82f6"
-violetColor = "#a78bfa"
-grayColor = "#94a3b8"
+greenColor = "#238636"
+redColor = "#da3633"
+orangeColor = "#9e6a03"
+yellowColor = "#9e6a03"
+blueColor = "#2f81f7"
+violetColor = "#8957e5"
+grayColor = "#8b949e"
 
-chartCategoricalColors = ["#3b82f6", "#22c55e", "#f59e0b", "#a78bfa", "#ef4444", "#14b8a6", "#94a3b8"]
-chartSequentialColors = ["#eff6ff", "#dbeafe", "#bfdbfe", "#93c5fd", "#60a5fa", "#3b82f6", "#2563eb", "#1d4ed8", "#1e40af", "#1e3a8a"]
+chartCategoricalColors = ["#2f81f7", "#3fb950", "#d29922", "#a371f7", "#f85149", "#39c5cf", "#8b949e"]
+chartSequentialColors = ["#0d1117", "#0a3069", "#0d419d", "#1158c7", "#1f6feb", "#388bfd", "#58a6ff", "#79c0ff", "#a5d6ff", "#cae8ff"]
 
-dataframeBorderColor = "#334155"
-dataframeHeaderBackgroundColor = "#1e293b"
+dataframeBorderColor = "#2a3441"
+dataframeHeaderBackgroundColor = "#1c2230"
 
 [theme.sidebar]
-backgroundColor = "#0b1220"
-secondaryBackgroundColor = "#1e293b"
-codeBackgroundColor = "#1e293b"
-textColor = "#e2e8f0"
-borderColor = "#334155"
-primaryColor = "#3b82f6"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+codeBackgroundColor = "#161b22"
+textColor = "#adbac7"
+borderColor = "#2a3441"
+primaryColor = "#2f81f7"

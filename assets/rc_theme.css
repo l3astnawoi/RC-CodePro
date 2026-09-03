@@ -1,0 +1,290 @@
+/* =========================================================================
+   RC CodePro — shared UI theme  (STEP 2: UI Foundation)
+   Injected once per rerun by utils.ui.inject_theme().
+
+   SCOPE: visual foundation only. No engineering logic, no layout
+   restructuring, no display:none on core Streamlit chrome.
+   Selectors lean on Streamlit's data-testid / data-baseweb hooks — these
+   are semi-stable; re-verify this file after a Streamlit upgrade.
+   Colours / radius / base font size / heading scale are driven by
+   .streamlit/config.toml; this sheet only adds what config cannot express
+   plus the .rc-* component classes used by utils/ui.py.
+   ========================================================================= */
+
+:root {
+  --rc-bg: #0d1117;
+  --rc-surface: #161b22;
+  --rc-surface-2: #1c2230;
+  --rc-border: #2a3441;
+  --rc-border-strong: #3a4553;
+
+  --rc-primary: #2f81f7;
+  --rc-primary-hover: #4d94f9;
+
+  --rc-success: #238636;  --rc-success-text: #3fb950;  --rc-success-bg: rgba(35,134,54,.15);
+  --rc-warning: #9e6a03;  --rc-warning-text: #d29922;  --rc-warning-bg: rgba(158,106,3,.16);
+  --rc-danger:  #da3633;  --rc-danger-text:  #f85149;  --rc-danger-bg:  rgba(218,54,51,.15);
+
+  --rc-text: #e6edf3;
+  --rc-text-secondary: #adbac7;
+  --rc-text-muted: #8b949e;
+
+  --rc-input: #1c2230;
+  --rc-input-border: #2a3441;
+
+  --rc-radius-sm: 6px;
+  --rc-radius-md: 8px;
+  --rc-radius-lg: 10px;
+
+  --rc-space-1: 4px;  --rc-space-2: 8px;  --rc-space-3: 12px;
+  --rc-space-4: 16px; --rc-space-5: 20px; --rc-space-6: 24px; --rc-space-8: 32px;
+
+  --rc-font: 'Inter', 'Noto Sans Thai', 'Leelawadee UI', 'Tahoma',
+             system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --rc-font-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, Consolas,
+                  monospace;
+}
+
+/* ---- base --------------------------------------------------------------- */
+html, body, .stApp { font-family: var(--rc-font); }
+
+/* trim Streamlit's tall default top padding on the main area, widen a bit */
+[data-testid="stMainBlockContainer"] {
+  padding-top: var(--rc-space-5);
+  padding-bottom: var(--rc-space-8);
+  max-width: 1600px;
+}
+@media (max-width: 1400px) {
+  [data-testid="stMainBlockContainer"] { max-width: 100%; }
+}
+
+/* calmer gap between stacked blocks */
+[data-testid="stVerticalBlock"] { gap: var(--rc-space-3); }
+
+/* Responsive columns — on small laptops / narrow browsers let column rows
+   wrap and stack instead of squeezing labels & steppers.  The 1366 / 1440 /
+   1920 desktop targets are untouched (they never hit this breakpoint). */
+@media (max-width: 1200px) {
+  [data-testid="stHorizontalBlock"] { flex-wrap: wrap; row-gap: var(--rc-space-3); }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { min-width: 240px; }
+}
+@media (max-width: 720px) {
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    min-width: 100%; flex-basis: 100%;
+  }
+}
+
+/* engineering numbers: tabular figures everywhere they matter */
+[data-testid="stMetricValue"],
+[data-testid="stMarkdownContainer"] table td,
+.stNumberInput input, .stTextInput input,
+.rc-eng-table, .rc-util-val, .rc-result-dc { font-variant-numeric: tabular-nums; }
+
+/* ---- sidebar --------------------------------------------------------- */
+[data-testid="stSidebar"] { border-right: 1px solid var(--rc-border); }
+[data-testid="stSidebarNav"] { padding-top: var(--rc-space-2); }
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+  background: rgba(47,129,247,.14);
+  border-radius: var(--rc-radius-sm);
+}
+/* nav section headers -> compact uppercase engineering labels */
+[data-testid="stSidebarNav"] [class*="NavSectionHeader"],
+[data-testid="stNavSectionHeader"] {
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  font-size: .68rem;
+  font-weight: 700;
+  color: var(--rc-text-muted);
+}
+
+/* ---- inputs ------------------------------------------------------------ */
+[data-testid="stWidgetLabel"] p {
+  font-size: .8rem;
+  font-weight: 500;
+  color: var(--rc-text-secondary);
+}
+div[data-baseweb="input"], div[data-baseweb="select"] > div {
+  background: var(--rc-input);
+  border-radius: var(--rc-radius-sm);
+}
+
+/* ---- buttons -------------------------------------------------------- */
+.stButton > button, .stDownloadButton > button {
+  font-weight: 600;
+  font-size: .85rem;
+  border-radius: var(--rc-radius-sm);
+}
+
+/* ---- expander -> section-card header ------------------------------ */
+[data-testid="stExpander"] { background: var(--rc-surface); }
+[data-testid="stExpander"] summary {
+  font-weight: 600;
+  font-size: .8rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--rc-text-secondary);
+}
+[data-testid="stExpander"] summary:hover { color: var(--rc-text); }
+
+/* ---- tabs -------------------------------------------------------- */
+[data-baseweb="tab-list"] { border-bottom: 1px solid var(--rc-border); }
+[data-baseweb="tab"] {
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--rc-text-muted);
+}
+[data-baseweb="tab"][aria-selected="true"] { color: var(--rc-text); }
+[data-baseweb="tab-highlight"] { background: var(--rc-primary); }
+
+/* ---- metric -> compact engineering KPI --------------------------- */
+[data-testid="stMetric"] {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-md);
+  padding: var(--rc-space-3) var(--rc-space-4);
+}
+[data-testid="stMetricLabel"] p {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--rc-text-muted);
+}
+[data-testid="stMetricValue"] { font-size: 1.35rem; font-weight: 650; }
+
+/* ---- alert callouts: tighter --------------------------------- */
+[data-testid="stAlert"] {
+  border-radius: var(--rc-radius-sm);
+  font-size: .85rem;
+}
+
+/* ---- plain markdown pipe-tables on dark ---------------------- */
+[data-testid="stMarkdownContainer"] table { border-collapse: collapse; font-size: .85rem; }
+[data-testid="stMarkdownContainer"] table th {
+  background: var(--rc-surface-2);
+  color: var(--rc-text-muted);
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--rc-border-strong);
+}
+[data-testid="stMarkdownContainer"] table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--rc-border);
+  color: var(--rc-text-secondary);
+}
+
+/* =========================================================================
+   RC component classes — consumed by utils/ui.py
+   ========================================================================= */
+
+.rc-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--rc-space-4);
+  padding: 2px 2px 10px;
+  margin-bottom: var(--rc-space-3);
+  border-bottom: 1px solid var(--rc-border);
+  font-size: .78rem;
+}
+.rc-topbar-brand { font-weight: 700; color: var(--rc-text); letter-spacing: .02em; }
+.rc-topbar-module { color: var(--rc-text-secondary); }
+.rc-topbar-right { display: flex; align-items: center; gap: 0; }
+.rc-topbar-proj { color: var(--rc-text-secondary); }
+.rc-topbar-tag {
+  color: var(--rc-text-muted); font-size: .72rem; letter-spacing: .03em;
+  border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm);
+  padding: 1px 7px;
+}
+.rc-sep { margin: 0 7px; opacity: .45; }
+
+.rc-breadcrumb {
+  font-size: .72rem; color: var(--rc-text-muted);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: var(--rc-space-2);
+}
+
+.rc-page-header {
+  margin: 0 0 var(--rc-space-5);
+  padding-bottom: var(--rc-space-3);
+  border-bottom: 1px solid var(--rc-border);
+}
+.rc-page-title-row { display: flex; align-items: center; gap: var(--rc-space-3); }
+.rc-page-title {
+  margin: 0; font-size: 1.5rem; font-weight: 700;
+  color: var(--rc-text); letter-spacing: -.01em;
+}
+.rc-page-subtitle { margin: 4px 0 0; font-size: .85rem; color: var(--rc-text-secondary); }
+
+.rc-card-title {
+  font-size: .78rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em;
+  color: var(--rc-text-secondary);
+  margin-bottom: var(--rc-space-2);
+}
+
+.rc-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: .72rem; font-weight: 700; letter-spacing: .03em;
+  padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+}
+.rc-badge-ico { font-weight: 800; line-height: 1; }
+.rc-badge-pass { background: var(--rc-success-bg); color: var(--rc-success-text); border: 1px solid rgba(63,185,80,.35); }
+.rc-badge-fail { background: var(--rc-danger-bg);  color: var(--rc-danger-text);  border: 1px solid rgba(248,81,73,.35); }
+.rc-badge-warn { background: var(--rc-warning-bg); color: var(--rc-warning-text); border: 1px solid rgba(210,153,34,.35); }
+.rc-badge-info { background: rgba(139,148,158,.15); color: var(--rc-text-secondary); border: 1px solid var(--rc-border-strong); }
+
+.rc-util { margin: 6px 0; }
+.rc-util-head { display: flex; justify-content: space-between; align-items: baseline; font-size: .8rem; margin-bottom: 3px; }
+.rc-util-label { color: var(--rc-text-secondary); }
+.rc-util-val { font-weight: 700; }
+.rc-util-track { height: 6px; background: var(--rc-surface-2); border-radius: 999px; overflow: hidden; }
+.rc-util-fill { height: 100%; border-radius: 999px; background: var(--rc-primary); }
+.rc-util--ok   .rc-util-fill { background: var(--rc-success); }
+.rc-util--ok   .rc-util-val  { color: var(--rc-success-text); }
+.rc-util--near .rc-util-fill { background: var(--rc-warning-text); }
+.rc-util--near .rc-util-val  { color: var(--rc-warning-text); }
+.rc-util--fail .rc-util-fill { background: var(--rc-danger); }
+.rc-util--fail .rc-util-val  { color: var(--rc-danger-text); }
+
+.rc-result-card {
+  border: 1px solid var(--rc-border); background: var(--rc-surface);
+  border-radius: var(--rc-radius-md); padding: var(--rc-space-4);
+}
+.rc-result-title {
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--rc-text-muted); margin-bottom: 6px;
+}
+.rc-result-dc { font-size: 1.05rem; font-weight: 650; color: var(--rc-text); }
+.rc-result-dc .rc-unit { font-size: .8rem; color: var(--rc-text-muted); font-weight: 500; margin-left: 4px; }
+.rc-result-foot { margin-top: var(--rc-space-3); }
+
+.rc-kpi {
+  border: 1px solid var(--rc-border); background: var(--rc-surface);
+  border-radius: var(--rc-radius-md); padding: var(--rc-space-3) var(--rc-space-4);
+}
+.rc-kpi-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--rc-text-muted); }
+.rc-kpi-value { font-size: 1.3rem; font-weight: 650; color: var(--rc-text); font-variant-numeric: tabular-nums; }
+.rc-kpi-sub { font-size: .75rem; color: var(--rc-text-secondary); }
+
+.rc-project-card {
+  border: 1px solid var(--rc-border); background: var(--rc-surface);
+  border-radius: var(--rc-radius-md); padding: var(--rc-space-3) var(--rc-space-4);
+}
+.rc-project-card-head { font-size: .66rem; letter-spacing: .09em; font-weight: 700; color: var(--rc-text-muted); }
+.rc-project-name { font-size: .95rem; font-weight: 650; color: var(--rc-text); margin: 4px 0 8px; }
+.rc-project-meta { margin: 0; display: grid; gap: 3px; }
+.rc-project-meta > div { display: flex; justify-content: space-between; gap: 12px; font-size: .78rem; }
+.rc-project-meta dt { color: var(--rc-text-muted); margin: 0; }
+.rc-project-meta dd { color: var(--rc-text-secondary); margin: 0; text-align: right; }
+
+.rc-eng-table {
+  border-collapse: collapse; width: 100%;
+  font-size: .85rem; margin: .25rem 0 .5rem;
+}
+.rc-eng-table th {
+  background: var(--rc-surface-2); color: var(--rc-text-muted);
+  font-weight: 600; padding: 7px 12px; white-space: nowrap;
+  border-bottom: 2px solid var(--rc-border-strong);
+}
+.rc-eng-table td { padding: 6px 12px; border-bottom: 1px solid var(--rc-border); color: var(--rc-text-secondary); }
+.rc-eng-table tr.rc-eng-total td { background: rgba(47,129,247,.12); color: var(--rc-text); font-weight: 700; }
+.rc-num { text-align: right; }

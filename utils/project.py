@@ -1,8 +1,13 @@
-"""Project-information header shared by every design module.
+"""Project information — single source of truth for the whole app.
 
-The values are held in ``st.session_state`` (keys ``proj_name`` /
-``proj_location`` / ``proj_engineer`` / ``proj_date``) so they are set once
-in the sidebar and read by any module when it builds a PDF report.
+The values live in ``st.session_state`` under the keys ``proj_name`` /
+``proj_location`` / ``proj_engineer`` / ``proj_date``.  They are edited on
+the **Project page** (:func:`render_project_page`) and read by any design
+module when it builds a PDF report (:func:`get_project_info`).
+
+STEP 3: the editable panel moved out of the sidebar onto its own page so
+there is exactly one place to change these values.  The session-state key
+names are unchanged.
 """
 
 import datetime
@@ -15,18 +20,86 @@ DEFAULTS = {
     "proj_engineer": "-",
 }
 
+DESIGN_CODE = "ACI 318M-08"
+DESIGN_UNITS = "MKS (cm · kgf · ksc)"
 
-def render_project_info_sidebar():
-    """Render the 'ข้อมูลโครงการ (Project Info)' expander in the sidebar."""
-    with st.sidebar.expander("ข้อมูลโครงการ (Project Info)", expanded=True):
-        st.text_input("ชื่อโครงการ (Project Name)",
-                      value=DEFAULTS["proj_name"], key="proj_name")
-        st.text_input("สถานที่ก่อสร้าง (Location)",
-                      value=DEFAULTS["proj_location"], key="proj_location")
-        st.text_input("วิศวกรผู้ออกแบบ (Engineer)",
-                      value=DEFAULTS["proj_engineer"], key="proj_engineer")
-        st.date_input("วันที่ (Date)",
-                      value=datetime.date.today(), key="proj_date")
+
+def ensure_project_state():
+    """Seed the persistent project keys from the defaults if they are not
+    set yet.  Idempotent — safe to call on every rerun.  These keys are
+    plain state (not widget keys) so Streamlit never garbage-collects them
+    when the Project page is not on screen."""
+    st.session_state.setdefault("proj_name", DEFAULTS["proj_name"])
+    st.session_state.setdefault("proj_location", DEFAULTS["proj_location"])
+    st.session_state.setdefault("proj_engineer", DEFAULTS["proj_engineer"])
+    st.session_state.setdefault("proj_date", datetime.date.today())
+
+
+def render_project_page():
+    """PROJECT / Project Information page — the one place to edit project data."""
+    from utils import ui
+
+    ensure_project_state()
+    ui.page_header(
+        "Project Information",
+        "การตั้งค่าโครงการและพารามิเตอร์การออกแบบ "
+        "(Project configuration & design settings)",
+        crumbs=("โครงการ (Project)", "ข้อมูลโครงการ (Project Information)"),
+    )
+
+    _raw_date = st.session_state["proj_date"]
+    if not hasattr(_raw_date, "isoformat"):
+        _raw_date = datetime.date.today()
+
+    with st.container(border=True):
+        st.html('<div class="rc-card-title">Project Information</div>')
+        # No widget keys on purpose: the persistent state lives under the
+        # plain keys proj_name / proj_location / proj_engineer / proj_date,
+        # which survive page navigation.  The form widgets are pre-filled
+        # from those keys and their submitted return values are written back
+        # on save.
+        with st.form("project_info_form", border=False):
+            name = st.text_input(
+                "ชื่อโครงการ (Project Name)",
+                value=str(st.session_state["proj_name"]))
+            c1, c2 = st.columns(2)
+            with c1:
+                location = st.text_input(
+                    "สถานที่ก่อสร้าง (Location)",
+                    value=str(st.session_state["proj_location"]))
+            with c2:
+                engineer = st.text_input(
+                    "วิศวกรผู้ออกแบบ (Engineer)",
+                    value=str(st.session_state["proj_engineer"]))
+            date_val = st.date_input("วันที่ (Date)", value=_raw_date)
+
+            saved = st.form_submit_button(
+                "บันทึกข้อมูลโครงการ (Save Project Information)",
+                type="primary")
+
+        if saved:
+            st.session_state["proj_name"] = name
+            st.session_state["proj_location"] = location
+            st.session_state["proj_engineer"] = engineer
+            st.session_state["proj_date"] = date_val
+            # rerun so the sidebar card + top header (rendered before the
+            # page body) pick up the new values on the same interaction
+            if hasattr(st, "toast"):
+                st.toast("บันทึกข้อมูลโครงการแล้ว (saved)", icon="✅")
+            st.rerun()
+
+    info = get_project_info()
+    ui.project_summary(
+        [
+            ("Project", info["project_name"]),
+            ("Engineer", info["engineer"]),
+            ("Location", info["location"]),
+            ("Date", info["date"]),
+            ("Design code", DESIGN_CODE),
+            ("Units", DESIGN_UNITS),
+        ],
+        title="PROJECT SUMMARY",
+    )
 
 
 def get_project_info():
@@ -103,15 +176,34 @@ def render_report_expander(*, key, filename, title, params, checks=None,
 
         if not FONT_AVAILABLE:
             st.warning(font_status_message())
-        try:
-            pdf_bytes = build_report(
-                title=title, project_name=pname, engineer=peng,
-                location=str(st.session_state.get("proj_location", "-")),
-                params=params, checks=checks, figures=figures,
-                status=status, summary=summary, boq_dataframe=boq_dataframe)
+
+        # Build the PDF only when the engineer asks for it — not on every
+        # page rerun.  The bytes are cached in session_state so the download
+        # button can serve them without rebuilding.
+        _pdf_key = f"{key}_rep_pdf"
+        if st.button("🛠️  สร้างรายงาน PDF (Generate PDF Report)",
+                     key=f"{key}_rep_gen", type="primary"):
+            try:
+                with st.spinner("กำลังสร้างรายงาน… (Generating report…)"):
+                    st.session_state[_pdf_key] = build_report(
+                        title=title, project_name=pname, engineer=peng,
+                        location=str(st.session_state.get("proj_location",
+                                                          "-")),
+                        params=params, checks=checks, figures=figures,
+                        status=status, summary=summary,
+                        boq_dataframe=boq_dataframe)
+            except Exception as exc:  # pragma: no cover
+                st.session_state.pop(_pdf_key, None)
+                st.error("❌ สร้างรายงานไม่สำเร็จ — โปรดตรวจสอบข้อมูลนำเข้า "
+                         "แล้วลองอีกครั้ง (Report generation failed)")
+                st.caption(f"รายละเอียดสำหรับผู้พัฒนา: {exc}")
+
+        _pdf_bytes = st.session_state.get(_pdf_key)
+        if _pdf_bytes:
+            st.success("✅ รายงานพร้อมแล้ว (Report ready)")
             st.download_button(
-                "⬇️  ดาวน์โหลดรายงาน (.pdf)", data=pdf_bytes,
+                "⬇️  ดาวน์โหลดรายงาน (.pdf)", data=_pdf_bytes,
                 file_name=filename, mime="application/pdf",
                 key=f"{key}_rep_dl")
-        except Exception as exc:  # pragma: no cover
-            st.error(f"สร้างรายงานไม่สำเร็จ: {exc}")
+        else:
+            st.caption("กดปุ่ม «สร้างรายงาน PDF» เพื่อสร้างไฟล์รายงาน")

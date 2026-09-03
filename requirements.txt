@@ -2,5 +2,7 @@ streamlit
 numpy
 fpdf2
 uharfbuzz
+pillow
 matplotlib
 plotly
+pytest

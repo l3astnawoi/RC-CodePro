@@ -1,0 +1,256 @@
+[
+  {
+    "case_id": "EV-BEAM-001",
+    "module": "modules/beam.py :: _flex_ksc",
+    "category": "beam flexure",
+    "description": "Flexural capacity of a singly-reinforced, under-reinforced rectangular beam section (MKS).",
+    "inputs": {
+      "As_cm2": 15.0,
+      "fy_ksc": 4000.0,
+      "fc_ksc": 240.0,
+      "b_cm": 30.0,
+      "d_cm": 54.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2.7 / 9.3.2",
+      "equation": "a = As fy/(0.85 f'c b); Mn = As fy (d - a/2); phi from eps_t"
+    },
+    "expected": {
+      "a_cm": 9.803921568627452,
+      "Mn_kgfm": 29458.823529411762,
+      "phiMn_kgfm": 26512.941176470587
+    },
+    "intermediate": {
+      "beta1": 0.85,
+      "a_cm": 9.803921568627452,
+      "c_cm": 11.534025374855826,
+      "eps_t": 0.011045399999999997,
+      "tension_controlled": true,
+      "phi_code": 0.9,
+      "phi_engine_assumed": 0.9,
+      "Mn_kgfm": 29458.823529411762,
+      "phiMn_kgfm_code": 26512.941176470587,
+      "phiMn_kgfm_engine": 26512.941176470587
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 1e-06,
+      "rationale": "closed-form; only float dust expected. phi = 0.90 is valid here (eps_t = 0.0110 >> 0.005)."
+    },
+    "notes": "_flex_ksc returns phi*Mn with a HARDCODED phi = 0.90 (phi['flexure']); it performs no internal tension-controlled check. Valid only while the caller enforces rho <= rho_max. See EV-BEAM-002 note (VF-11).",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-BEAM-002",
+    "module": "modules/beam.py :: _flex_ksc",
+    "category": "beam flexure",
+    "description": "Higher reinforcement ratio, still tension-controlled (eps_t just above 0.005).",
+    "inputs": {
+      "As_cm2": 22.0,
+      "fy_ksc": 4000.0,
+      "fc_ksc": 240.0,
+      "b_cm": 30.0,
+      "d_cm": 54.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2.7 / 9.3.2"
+    },
+    "expected": {
+      "a_cm": 14.379084967320262,
+      "Mn_kgfm": 41193.202614379086,
+      "phiMn_kgfm": 37073.88235294118
+    },
+    "intermediate": {
+      "beta1": 0.85,
+      "a_cm": 14.379084967320262,
+      "c_cm": 16.916570549788545,
+      "eps_t": 0.00657640909090909,
+      "tension_controlled": true,
+      "phi_code": 0.9,
+      "phi_engine_assumed": 0.9,
+      "Mn_kgfm": 41193.202614379086,
+      "phiMn_kgfm_code": 37073.88235294118,
+      "phiMn_kgfm_engine": 37073.88235294118,
+      "VF11": "If As is pushed further (e.g. 30 cm2 here -> eps_t = 0.0040 < 0.005), the true phi drops to ~0.82 but _flex_ksc still returns 0.90*Mn, overstating phi*Mn by ~10%. The engine relies on the separate _rho_max_ksc check in _render_beam_section to catch this. RECORD."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 1e-06,
+      "rationale": "eps_t = 0.0066 >= 0.005 so phi = 0.90 still correct; closed form."
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-BEAM-003",
+    "module": "modules/beam.py :: _required_as (+ calc_As_min)",
+    "category": "beam flexure / minimum steel",
+    "description": "Required tension steel for a light factored moment, compared with As_min (ACI 10.5.1).",
+    "inputs": {
+      "Mu_kNm": 60.0,
+      "b_mm": 300.0,
+      "d_mm": 540.0,
+      "fc_MPa": 23.53596,
+      "fy_MPa": 392.266,
+      "phi": 0.9
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 10.5.1"
+    },
+    "expected": {
+      "As_req_mm2": 320.96157207304725,
+      "Rn_MPa": 0.7620789513793629,
+      "rho": 0.001981244272055847,
+      "feasible": true,
+      "As_min_mm2": 578.1790927584852,
+      "governing_As_mm2": 578.1790927584852
+    },
+    "intermediate": {
+      "note": "As_req (321.0) < As_min (578.2); the governing design steel is max(As_req, As_min)."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 1e-06,
+      "rationale": "closed-form quadratic inversion"
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-BEAM-004",
+    "module": "modules/beam.py :: _shear_check",
+    "category": "beam shear",
+    "description": "One-way shear where the concrete alone governs (Vu below phi*Vc).",
+    "inputs": {
+      "Vu_kN": 60.0,
+      "b_mm": 300.0,
+      "d_mm": 540.0,
+      "fc_MPa": 23.53596,
+      "fyt_MPa": 392.266,
+      "stirrup": "RB9 (Av = 2 x 63.62 mm2)",
+      "s_mm": 200.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.2.1.1 / 11.4.7 / 11.4.5"
+    },
+    "expected": {
+      "Vc_N": 133607.20983366133,
+      "phiVc_N": 100205.407375246,
+      "Vs_N": 134762.199768,
+      "Vs_max_N": 518710.34406009683,
+      "phiVs_N": 101071.649826,
+      "phiVn_N": 201277.05720124597,
+      "s_max_mm": 270.0,
+      "half_d_rule": false,
+      "ok": true
+    },
+    "intermediate": {
+      "phiVc_kN": 100.205407375246,
+      "phiVn_kN": 201.27705720124598
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "closed form; abs in N"
+    },
+    "notes": "Verdict is Pass-Fail: reference predicts ok = True.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-BEAM-005",
+    "module": "modules/beam.py :: _shear_check",
+    "category": "beam shear",
+    "description": "Shear demand needs stirrups; check phi*Vs, phi*Vn and the verdict.",
+    "inputs": {
+      "Vu_kN": 160.0,
+      "b_mm": 300.0,
+      "d_mm": 540.0,
+      "fc_MPa": 23.53596,
+      "fyt_MPa": 392.266,
+      "stirrup": "RB9 (Av = 2 x 63.62 mm2)",
+      "s_mm": 150.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.4.7.2"
+    },
+    "expected": {
+      "Vc_N": 133607.20983366133,
+      "phiVc_N": 100205.407375246,
+      "Vs_N": 179682.933024,
+      "Vs_max_N": 518710.34406009683,
+      "phiVs_N": 134762.199768,
+      "phiVn_N": 234967.607143246,
+      "s_max_mm": 270.0,
+      "half_d_rule": false,
+      "ok": true
+    },
+    "intermediate": {
+      "phiVn_kN": 234.967607143246
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "closed form"
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-BEAM-006",
+    "module": "modules/beam.py :: _shear_check (s_max branch)",
+    "category": "beam shear / discrete",
+    "description": "When Vs exceeds 0.33 sqrt(f'c) bw d the maximum stirrup spacing halves (d/4, 300 mm).",
+    "inputs": {
+      "Vu_kN": 260.0,
+      "s_mm": 90.0,
+      "b_mm": 300.0,
+      "d_mm": 540.0,
+      "fc_MPa": 23.53596,
+      "fyt_MPa": 392.266
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.4.5.3"
+    },
+    "expected": {
+      "Vs_N": 299471.55504,
+      "threshold_0p33_N": 259355.17203004842,
+      "half_d_rule_triggered": true,
+      "s_max_mm": 135.0,
+      "ok": true
+    },
+    "intermediate": {
+      "Vc_N": 133607.20983366133,
+      "phiVc_N": 100205.407375246,
+      "Vs_N": 299471.55504,
+      "Vs_max_N": 518710.34406009683,
+      "phiVs_N": 224603.66628,
+      "phiVn_N": 324809.073655246,
+      "s_max_mm": 135.0,
+      "half_d_rule": true,
+      "ok": true
+    },
+    "tolerance": {
+      "type": "discrete",
+      "rationale": "the branch flag and s_max are exact; Vs numerical rel 1e-6"
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  }
+]

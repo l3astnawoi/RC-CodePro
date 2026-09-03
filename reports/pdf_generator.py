@@ -163,6 +163,45 @@ def _status_thai(passed):
     return "ผ่านมาตรฐาน (PASS)" if passed else "ไม่ผ่าน (FAIL)"
 
 
+# --- report verdict presentation (PASS / REVIEW / FAIL / MODEL) --------------
+# Presentation only.  The engineering verdict is decided by the calling module;
+# this table just picks a label + a print-friendly colour for it.
+_STATUS_STYLE = {
+    "PASS":   {"label": "ผ่านมาตรฐาน (PASS)",
+               "rgb": (0, 120, 55),  "fill": (232, 245, 236)},
+    "FAIL":   {"label": "ไม่ผ่าน (FAIL)",
+               "rgb": (188, 30, 30), "fill": (250, 232, 232)},
+    "REVIEW": {"label": "ต้องตรวจสอบเพิ่มเติม (REVIEW)",
+               "rgb": (150, 95, 5),  "fill": (252, 244, 224)},
+    "MODEL":  {"label": "แบบจำลองถูกสร้าง (MODEL GENERATED)",
+               "rgb": (30, 45, 85),  "fill": (232, 238, 248)},
+}
+
+
+def _status_state(status, checks_ok=True):
+    """Resolve a verdict value to one of PASS / FAIL / REVIEW / MODEL.
+
+    Behaviour preserved exactly for every value the modules pass today:
+    ``bool True`` -> PASS, ``bool False`` -> FAIL, ``None`` -> follows
+    ``checks_ok``, and ``"PASS" / "OK" / "TRUE"`` -> PASS.  New: the strings
+    ``"MODEL*"`` (Building Model output) -> MODEL and ``"REVIEW" / "WARN*"``
+    -> REVIEW.  Any other string stays FAIL, exactly as before.  No
+    engineering value is recomputed here.
+    """
+    if isinstance(status, bool):
+        return "PASS" if status else "FAIL"
+    if status is None:
+        return "PASS" if checks_ok else "FAIL"
+    s = str(status).strip().upper()
+    if s in ("PASS", "OK", "TRUE"):
+        return "PASS"
+    if s in ("MODEL", "MODEL GENERATED", "MODEL OUTPUT", "GENERATED"):
+        return "MODEL"
+    if s in ("REVIEW", "WARN", "WARNING", "CHECK"):
+        return "REVIEW"
+    return "FAIL"
+
+
 # ---------------------------------------------------------------------------
 # PDF sheet
 # ---------------------------------------------------------------------------
@@ -193,46 +232,86 @@ def _project_header(pdf, info):
     pdf.ln(3)
 
 
+_NAVY = (28, 40, 74)             # section bars / title — dark navy, prints grey
+
+
 class _Sheet(FPDF):
     report_title = "ใบคำนวณการออกแบบ"
     project_info = None
 
     def header(self):
-        # brand line — same on every page
+        # slim running header — same on every page
         self.set_font(_FONT, "B", SZ_META)
         self.set_text_color(90, 90, 90)
-        self.cell(0, 6, _t("RC CodePro — Structural Calculation Report"),
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="R")
-        _project_header(self, self.project_info)
-        self.set_font(_FONT, "B", SZ_TITLE)
+        self.cell(0, 6, _t("RC CodePro  |  Structural Design Calculation"),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="L")
+        self.set_draw_color(180, 180, 180)
+        self.set_line_width(0.2)
+        y = self.get_y() + 0.5
+        self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.ln(4)
+        if self.page_no() == 1:
+            self._title_block()
+
+    def _title_block(self):
+        """Page-1 title block — the report's cover matter."""
+        self.ln(3)
+        self.set_font(_FONT, "B", SZ_TITLE + 6)
+        self.set_text_color(*_NAVY)
+        self.multi_cell(0, 12, _t("RC CODEPRO"), align="C",
+                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.set_font(_FONT, "B", SZ_SECTION)
+        self.set_text_color(70, 70, 70)
+        self.multi_cell(
+            0, 8,
+            _t("REINFORCED CONCRETE STRUCTURAL DESIGN CALCULATION REPORT"),
+            align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(1.5)
+        self.set_font(_FONT, "B", SZ_ROW + 1)
         self.set_text_color(0, 0, 0)
-        self.multi_cell(0, 10, _t(self.report_title), align="C")
-        self.set_draw_color(60, 60, 60)
-        self.set_line_width(0.5)
+        self.multi_cell(0, 7.5, _t(self.report_title), align="C",
+                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.ln(3)
+        _project_header(self, self.project_info)
+        self.set_draw_color(*_NAVY)
+        self.set_line_width(0.6)
         y = self.get_y() + 1
         self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.set_line_width(0.15)
         self.ln(6)
 
     def footer(self):
-        self.set_y(-15)
+        self.set_y(-14)
+        self.set_draw_color(180, 180, 180)
+        self.set_line_width(0.2)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin,
+                  self.get_y())
+        self.ln(1)
         self.set_font(_FONT, "I", SZ_FOOTER)
         self.set_text_color(120, 120, 120)
+        proj = ""
+        if self.project_info:
+            proj = str(self.project_info.get("project_name", "") or "")
+        yf = self.get_y()
+        self.cell(0, 7, _t(proj), align="L")
+        self.set_y(yf)
         self.cell(
-            0, 8,
-            _t(f"จัดทำเมื่อ {date.today().isoformat()}   ·   "
-               f"ACI 318M-08 (หน่วยเมตริก)   ·   หน้า {self.page_no()} / {{nb}}"),
-            align="C",
-        )
+            0, 7,
+            _t(f"ACI 318M-08 (หน่วยเมตริก)   ·   หน้า {self.page_no()} / {{nb}}"),
+            align="R")
 
 
 def _section(pdf, title):
-    pdf.ln(2.5)
+    pdf.ln(3)
+    if pdf.get_y() + 22.0 > pdf.page_break_trigger:   # keep header with content
+        pdf.add_page()
     pdf.set_font(_FONT, "B", SZ_SECTION)
-    pdf.set_text_color(20, 20, 20)
-    pdf.set_fill_color(226, 232, 240)
-    pdf.cell(0, 9, _t(f"  {title}"),
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_fill_color(*_NAVY)
+    pdf.cell(0, 8.5, _t(f"  {title}"),
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
-    pdf.ln(1.5)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(1.8)
 
 
 def _row(pdf, label, value, unit="", nd=2):
@@ -243,8 +322,8 @@ def _row(pdf, label, value, unit="", nd=2):
     pdf.cell(LABEL_W, LH_ROW, _t(f"   {label}"))
     pdf.set_font(_FONT, "B", SZ_ROW)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, LH_ROW, _t(text),
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, LH_ROW, _t(f"{text}   "),
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="R")
     pdf.set_draw_color(226, 226, 226)
     pdf.set_line_width(0.15)
     pdf.line(pdf.l_margin, y0 + LH_ROW, pdf.w - pdf.r_margin, y0 + LH_ROW)
@@ -282,13 +361,30 @@ def _new_sheet(title, project=None):
 
 
 def _result_block(pdf, passed, status_text, summary=None):
+    """Verdict banner.  ``status_text`` selects the label + colour (PASS /
+    REVIEW / FAIL / MODEL); when it is not one of those it falls back to the
+    ``passed`` bool so every existing caller renders exactly as before."""
+    state = _status_state(status_text)
+    if str(status_text).strip().upper() not in _STATUS_STYLE:
+        state = "PASS" if passed else "FAIL"
+    sty = _STATUS_STYLE.get(state, _STATUS_STYLE["FAIL"])
+
+    if pdf.get_y() + 20.0 > pdf.page_break_trigger:
+        pdf.add_page()
     pdf.ln(5)
+    pdf.set_fill_color(*sty["fill"])
+    pdf.set_draw_color(*sty["rgb"])
+    pdf.set_line_width(0.4)
     pdf.set_font(_FONT, "B", SZ_RESULT)
-    pdf.set_text_color(*((0, 130, 0) if passed else (190, 0, 0)))
-    pdf.cell(0, 11, _t(f"ผลสรุป:  {_status_thai(passed)}"),
+    pdf.set_text_color(*sty["rgb"])
+    pdf.cell(0, 12, _t(f"  ผลสรุป (Result):  {sty['label']}"),
+             border=1, fill=True,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_draw_color(226, 226, 226)
+    pdf.set_line_width(0.15)
     pdf.set_text_color(0, 0, 0)
     if summary:
+        pdf.ln(1.5)
         pdf.set_font(_FONT, "", SZ_SMALL)
         pdf.multi_cell(0, 6.5, _t(summary), align="L")
 
@@ -372,7 +468,12 @@ def _image_section(pdf, buf, title="รายละเอียดหน้า�
 # its own dictionaries — no per-element PDF formatting code.
 # ---------------------------------------------------------------------------
 
-_CHK_COL = (74.0, 44.0, 44.0)          # Check | Demand | Capacity  (Status = rest)
+# Check | Demand | Capacity | Status  — widths sum to the A4 text column
+# (210 - 20 - 20 = 170 mm).  Status shows a compact PASS / FAIL token so the
+# cell never clips; the full "ผ่านมาตรฐาน (PASS)" wording stays in the verdict
+# banner.
+_CHK_COL = (73.0, 40.5, 40.5)
+_CHK_STATUS_W = 16.0
 
 
 def _fig_to_buf(obj, dpi=200):
@@ -406,32 +507,53 @@ def _fig_to_buf(obj, dpi=200):
 
 
 def _checks_table(pdf, checks):
-    """Section 2 body — a 4-column Demand / Capacity / Status table."""
-    pdf.set_font(_FONT, "B", SZ_ROW)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_fill_color(238, 240, 244)
+    """Section 2 body — a 4-column Demand / Capacity / Status table.
+
+    Presentation only: numeric Demand / Capacity cells are right-aligned,
+    data rows get a faint zebra fill, and the header row is redrawn after a
+    page break.  Values, units and the PASS/FAIL colour logic are unchanged.
+    """
     heads = ("รายการตรวจสอบ", "ความต้องการ (Demand)", "กำลัง (Capacity)",
              "สถานะ")
-    for w, txt in zip(_CHK_COL, heads):
-        pdf.cell(w, LH_ROW, _t(f" {txt}"), fill=True)
-    pdf.cell(0, LH_ROW, _t(f" {heads[3]}"), fill=True,
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
+    def _header_row():
+        pdf.set_font(_FONT, "B", SZ_ROW)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_fill_color(*_NAVY)
+        pdf.set_text_color(255, 255, 255)
+        for k, (w, txt) in enumerate(zip(_CHK_COL, heads)):
+            pdf.cell(w, LH_ROW, _t(f" {txt}"), fill=True,
+                     align="L" if k == 0 else "R")
+        pdf.cell(_CHK_STATUS_W, LH_ROW, _t(heads[3]), fill=True, align="C",
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(0, 0, 0)
+
+    _header_row()
     all_ok = True
-    for row in checks:
+    for ri, row in enumerate(checks):
         name, demand, cap, ok = (list(row) + [None, None, None])[:4]
         all_ok = all_ok and bool(ok)
+        if pdf.get_y() + LH_ROW > pdf.page_break_trigger:
+            pdf.add_page()
+            _header_row()
         y0 = pdf.get_y()
+        zebra = ri % 2 == 1
+        if zebra:
+            pdf.set_fill_color(246, 248, 250)
         pdf.set_font(_FONT, "", SZ_ROW)
         pdf.set_text_color(45, 45, 45)
-        pdf.cell(_CHK_COL[0], LH_ROW, _t(f"  {name}"))
+        pdf.cell(_CHK_COL[0], LH_ROW, _t(f"  {name}"), fill=zebra)
         pdf.cell(_CHK_COL[1], LH_ROW,
-                 _t(demand if isinstance(demand, str) else _fmt(demand)))
+                 _t((demand if isinstance(demand, str) else _fmt(demand))
+                    + "  "),
+                 fill=zebra, align="R")
         pdf.cell(_CHK_COL[2], LH_ROW,
-                 _t(cap if isinstance(cap, str) else _fmt(cap)))
+                 _t((cap if isinstance(cap, str) else _fmt(cap)) + "  "),
+                 fill=zebra, align="R")
         pdf.set_font(_FONT, "B", SZ_ROW)
         pdf.set_text_color(*((0, 130, 0) if ok else (190, 0, 0)))
-        pdf.cell(0, LH_ROW, _t("ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"),
+        pdf.cell(_CHK_STATUS_W, LH_ROW, _t("PASS" if ok else "FAIL"),
+                 fill=zebra, align="C",
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(0, 0, 0)
         pdf.set_draw_color(226, 226, 226)
@@ -490,23 +612,25 @@ def _boq_table(pdf, df):
     last = len(cols) - 1
 
     pdf.set_font(_FONT, "B", SZ_ROW)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_fill_color(238, 240, 244)
+    pdf.set_fill_color(*_NAVY)
+    pdf.set_text_color(255, 255, 255)
     for k, (w, name) in enumerate(zip(widths, cols)):
         kw = dict(new_x=XPos.LMARGIN, new_y=YPos.NEXT) if k == last else {}
         pdf.cell(w, LH_ROW, _t(f" {name}"), fill=True,
                  align="L" if k == 0 else "R", **kw)
+    pdf.set_text_color(0, 0, 0)
 
     for ri, row in enumerate(rows):
         is_total = ri == len(rows) - 1
         y0 = pdf.get_y()
         pdf.set_font(_FONT, "B" if is_total else "", SZ_ROW)
         pdf.set_text_color(0, 0, 0) if is_total else pdf.set_text_color(45, 45, 45)
-        pdf.set_fill_color(245, 247, 250)
+        zebra = (not is_total) and ri % 2 == 1
+        pdf.set_fill_color(*((234, 238, 246) if is_total else (246, 248, 250)))
         for k, (w, val) in enumerate(zip(widths, row)):
             kw = dict(new_x=XPos.LMARGIN, new_y=YPos.NEXT) if k == last else {}
             txt = f"  {val}" if k == 0 else f"{_boq_num(val)}  "
-            pdf.cell(w, LH_ROW, _t(txt), fill=is_total,
+            pdf.cell(w, LH_ROW, _t(txt), fill=(is_total or zebra),
                      align="L" if k == 0 else "R", **kw)
         pdf.set_draw_color(226, 226, 226)
         pdf.set_line_width(0.15)
@@ -569,14 +693,12 @@ def build_report(*, title, project_name="", engineer="", location="-",
         _section(pdf, "สรุปปริมาณวัสดุโครงสร้าง (BOQ Estimate)")
         _boq_table(pdf, boq_dataframe)
 
-    # -- Verdict ---------------------------------------------------------
-    if status is None:
-        passed = checks_ok
-    elif isinstance(status, bool):
-        passed = status
-    else:
-        passed = str(status).strip().upper() in ("PASS", "OK", "TRUE")
-    _result_block(pdf, passed, "PASS" if passed else "FAIL", summary)
+    # -- Verdict -------------------------------------------------------------
+    # ``status`` bool True->PASS / False->FAIL exactly as before; the strings
+    # "MODEL*" and "REVIEW" now render as their own (non-PASS, non-FAIL)
+    # banners so a generated model is never shown as a design PASS.
+    state = _status_state(status, checks_ok)
+    _result_block(pdf, state == "PASS", state, summary)
 
     return _to_bytes(pdf)
 

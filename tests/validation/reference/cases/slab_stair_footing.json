@@ -1,0 +1,231 @@
+[
+  {
+    "case_id": "EV-SLAB-001",
+    "module": "modules/slab.py :: _as_flexure_ksc ; _temp_steel_ratio ; _spacing_for",
+    "category": "slab flexure (one-way)",
+    "description": "Required flexural steel for a 1 m one-way slab strip, plus shrinkage/temperature minimum and bar spacing.",
+    "inputs": {
+      "Mu_kgfm_per_m": 1200.0,
+      "b_cm": 100.0,
+      "d_cm": 12.0,
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0,
+      "h_cm": 15.0,
+      "bar": "DB10 (Ab = 0.785 cm2)",
+      "s_max_cm": 25.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 7.12.2.1 / 13.3.2"
+    },
+    "expected": {
+      "Rn_ksc": 9.25925925925926,
+      "rho": 0.002369876733768307,
+      "As_req_cm2_per_m": 2.8438520805219683,
+      "temp_ratio": 0.0018,
+      "As_min_cm2_per_m": 2.6999999999999997,
+      "spacing_cm": 25.0
+    },
+    "intermediate": {
+      "disc": 0.9092229484386347,
+      "note": "As_min uses total thickness h (15 cm), not d; matches the engine."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 1e-06,
+      "rationale": "closed form; spacing rule is discrete (exact)"
+    },
+    "notes": "_as_flexure_ksc also hardcodes phi = 0.90 with no TC check (same as beam _flex_ksc, VF-11). eps_t here is large (light strip) so 0.90 is valid.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-SLAB-002",
+    "module": "modules/slab.py :: _render_slab_design (two-way coefficients) + _as_flexure_ksc",
+    "category": "slab flexure (two-way)",
+    "description": "Two-way slab design moment. The flexure->As step is the same equation as EV-SLAB-001 (verified); the MOMENT COEFFICIENT table used by the engine is not independently verifiable here.",
+    "inputs": {
+      "note": "coefficients read from the engine's two-way table for m = Lx/Ly"
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "Ch. 13 / moment-coefficient method (edition-specific)",
+      "equation": "CODE REFERENCE TO VERIFY"
+    },
+    "expected": {
+      "flexure_equation": "verified via EV-SLAB-001",
+      "moment_coefficients": "REFERENCE REQUIRED"
+    },
+    "intermediate": {
+      "split": "Equation verified / Coefficient reference required. The two-way coefficient source (which table, which edition, one-way vs two-way threshold m) must be identified before a moment reference can be built. Do NOT invent coefficients."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD"
+    },
+    "notes": "Partial: the As-from-moment mechanics are covered by EV-SLAB-001; only the coefficient lookup is unresolved.",
+    "status": "REVIEW"
+  },
+  {
+    "case_id": "EV-STAIR-001",
+    "module": "modules/stair.py :: _as_flexure_ksc (byte-identical to slab._as_flexure_ksc)",
+    "category": "stair flexure",
+    "description": "Required flexural steel for a straight-stair waist strip, given the design moment.",
+    "inputs": {
+      "Mu_kgfm_per_m": 1500.0,
+      "b_cm": 100.0,
+      "d_cm": 12.5,
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2"
+    },
+    "expected": {
+      "Rn_ksc": 10.666666666666666,
+      "rho": 0.0027402859519453844,
+      "As_req_cm2_per_m": 3.42535743993173
+    },
+    "intermediate": {
+      "disc": 0.8954248366013072
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 1e-06,
+      "rationale": "closed form"
+    },
+    "notes": "The stair LOAD build-up (sloped-waist DL = t/100*2400/cos(theta), triangular-steps DL = (R/100)/2*2400, Wu = 1.2 DL + 1.6 LL, Mu = Wu L^2/8) is computed inside _render_straight_stair and is BLOCKED (see EV-STAIR-002). VF-06: the straight stair applies the sloped-waist load over the horizontal projection L; the U-shape uses a conservative max(flight, landing) DL. RECORD.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-STAIR-002",
+    "module": "modules/stair.py :: _render_straight_stair / _render_u_shape_stair (load build-up)",
+    "category": "stair load model",
+    "description": "Dead/live/factored load and design moment of the stair flight -- assembled inside the render function.",
+    "inputs": {
+      "note": "geometry + SDL + LL"
+    },
+    "reference_method": "BLOCKED",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "9.2 / statics"
+    },
+    "expected": {
+      "Wu_kgf_m2": "REFERENCE REQUIRED",
+      "Mu_kgfm": "REFERENCE REQUIRED"
+    },
+    "intermediate": {
+      "why_blocked": "No importable helper; needs a compute/render split (out of scope for EV-02). The equations are visible in source and a hand reference is straightforward -- deferred to EV-03 once the split exists.",
+      "VF06": "straight vs U-shape load-model difference documented in EV-STAIR-001 notes."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD"
+    },
+    "notes": "BLOCKED.",
+    "status": "BLOCKED"
+  },
+  {
+    "case_id": "EV-FOOT-001",
+    "module": "modules/footing.py :: _flexure_as",
+    "category": "footing flexure",
+    "description": "Required flexural steel over a footing strip for a given column-face cantilever moment (SI).",
+    "inputs": {
+      "Mu_Nmm": 120000000.0,
+      "b_mm": 2000.0,
+      "d_mm": 480.0,
+      "fc_MPa": 23.53596,
+      "fy_MPa": 392.266,
+      "phi": 0.9
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 15.4"
+    },
+    "expected": {
+      "As_req_mm2": 713.332783315479,
+      "Rn_MPa": 0.28935185185185186,
+      "rho": 0.0007430549826202906,
+      "feasible": true
+    },
+    "intermediate": {
+      "infeasible_sentinel": "_flexure_as returns As = float('inf'), feasible = False when d<=0 or disc<0 (vs None in beam/slab/stair -- RB-1)."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.0001,
+      "rationale": "closed-form quadratic inversion"
+    },
+    "notes": "The full isolated-footing chain (self-weight, net pressure qu, Mu = qu*width*Lc^2/2) is inside _render_isolated_footing -> BLOCKED (EV-FOOT-003).",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-FOOT-002",
+    "module": "modules/footing.py :: _render_pile_cap (bo_pile = 3.464*Dp + pi*d_avg)",
+    "category": "punching shear / code-sensitive (VF-09)",
+    "description": "Critical shear perimeter for a single CIRCULAR pile head. Engine uses a literal 3.464*Dp + pi*d; the ACI 11.11.1.2 critical section for a circular reaction area at d/2 is pi*(Dp + d).",
+    "inputs": {
+      "Dp_mm": 300.0,
+      "d_avg_mm": 450.0
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.11.1.2 / R11.11 / 15.5",
+      "equation": "b0 = pi (Dp + d) for a circular loaded area; CODE REFERENCE TO VERIFY the 3.464 literal"
+    },
+    "expected": {
+      "b0_code_pi_Dp_plus_d_mm": 2356.194490192345,
+      "b0_engine_literal_mm": 2452.916694115407,
+      "abs_diff_mm": 96.72220392306235,
+      "rel_diff": 0.041050178296260495
+    },
+    "intermediate": {
+      "3.464": "~= 2*sqrt(3); origin unclear. Possibly a square-ish idealisation of the pile with rounded corners (pi*d term = 4 quarter-circles). Not equal-area, not equal-perimeter to the circle. RECORD as VF-09.",
+      "square_column_case_OK": "For a SQUARE column the engine's bo = 4(c + d_avg) is the correct ACI 11.11.1.2 perimeter -- only the circular-pile literal is in question."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD",
+      "rationale": "documents a code-mapping question; EV-03 to confirm the intended perimeter and quantify the capacity impact."
+    },
+    "notes": "RECORD ONLY. Do not change footing.py.",
+    "status": "REVIEW"
+  },
+  {
+    "case_id": "EV-FOOT-003",
+    "module": "modules/footing.py :: _render_isolated_footing / _render_pile_cap (bearing, one-way & two-way shear, flexure chain)",
+    "category": "footing full chain",
+    "description": "End-to-end isolated-footing / pile-cap checks.",
+    "inputs": {
+      "note": "loads + geometry + soil qa"
+    },
+    "reference_method": "BLOCKED",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.11 / 15.x"
+    },
+    "expected": {
+      "q_service": "REFERENCE REQUIRED",
+      "phiVc_punch": "REFERENCE REQUIRED",
+      "phiVc_oneway": "REFERENCE REQUIRED",
+      "As_req": "REFERENCE REQUIRED"
+    },
+    "intermediate": {
+      "why_blocked": "computed inside render functions; nested _elastic_reactions/_side/_s0 not importable. Component equations ARE covered: EV-ACI-006 (two-way vc), EV-ACI-005 (one-way vc form), EV-FOOT-001 (flexure As). Full assembled numbers need the compute/render split."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD"
+    },
+    "notes": "BLOCKED.",
+    "status": "BLOCKED"
+  }
+]

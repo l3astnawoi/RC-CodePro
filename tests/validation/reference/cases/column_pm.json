@@ -1,0 +1,184 @@
+[
+  {
+    "case_id": "EV-COL-001",
+    "module": "modules/column.py :: _render_column (Po / phiPn_max) ; _calculate_pm_curve (Po, cap end-points)",
+    "category": "column axial anchor",
+    "description": "Pure-compression nominal strength Po and the tied design axial cap phi*Pn,max.",
+    "inputs": {
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0,
+      "b_cm": 40.0,
+      "h_cm": 40.0,
+      "n_bars": 8,
+      "bar": "DB20",
+      "Ab_cm2": 3.141592653589793,
+      "Ag_cm2": 1600.0,
+      "tied": true
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.3.6.1 / 10.3.6.2",
+      "equation": "Po = 0.85 f'c (Ag-Ast) + fy Ast ; phi*Pn,max = 0.80*0.65*Po (tied)"
+    },
+    "expected": {
+      "Ast_cm2": 25.132741228718345,
+      "Po_kgf": 421803.88570421486,
+      "phiPn_max_kgf": 219338.02056619173
+    },
+    "intermediate": {
+      "Ast_cm2": 25.132741228718345,
+      "Po_kgf": 421803.88570421486,
+      "phiPn_max_kgf": 219338.02056619173,
+      "Pnt_kgf": -100530.96491487337,
+      "phiPnt_kgf": -90477.86842338604,
+      "alpha": 0.8,
+      "phi_c": 0.65
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "closed form. DB20 area pi*20^2/4/100 = 3.14159 cm2 (engine uses REBAR table round(...,2) = 3.14 -> expect a ~1e-3 relative offset in Ast; flagged, not slack)."
+    },
+    "notes": "The engine's Ab comes from REBAR['DB20']['area'] = round(pi*400/4, 2) = 314.16 mm2; this reference uses the unrounded pi*d^2/4. Difference is the rounding only.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-COL-002",
+    "module": "modules/column.py :: _calculate_pm_curve (pure-tension end-point)",
+    "category": "column axial anchor",
+    "description": "Pure-tension capacity Pnt = -fy*Ast and its design value phi*Pnt (phi = 0.90).",
+    "inputs": {
+      "fy_ksc": 4000.0,
+      "n_bars": 8,
+      "bar": "DB20",
+      "Ab_cm2": 3.141592653589793
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.3 / 9.3.2"
+    },
+    "expected": {
+      "Pnt_kgf": -100530.96491487337,
+      "phiPnt_kgf": -90477.86842338604
+    },
+    "intermediate": {
+      "Ast_cm2": 25.132741228718345,
+      "Po_kgf": 421803.88570421486,
+      "phiPn_max_kgf": 219338.02056619173,
+      "Pnt_kgf": -100530.96491487337,
+      "phiPnt_kgf": -90477.86842338604,
+      "alpha": 0.8,
+      "phi_c": 0.65
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "closed form (bar-area rounding aside)"
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-COL-003",
+    "module": "modules/column.py :: _calculate_pm_curve",
+    "category": "column P-M interior",
+    "description": "Interaction point at low eccentricity.",
+    "inputs": {
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0,
+      "b_cm": 40.0,
+      "h_cm": 40.0,
+      "n_bars": 8,
+      "bar": "DB20"
+    },
+    "reference_method": "LEVEL_B",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 10.3",
+      "equation": "strain compatibility, eps_cu = 0.003, Whitney block"
+    },
+    "expected": {
+      "note": "Independent strain-compatibility reference supplied in EV-06: tests/validation/reference/reference_column_ev06.py (pm_point / pm_curve, math-only, no production import). The engine's _calculate_pm_curve reproduces it to rel < 1e-12 at all 46 curve points; balanced point + force equilibrium verified. Run tests/validation/run_ev06_column.py phase E."
+    },
+    "intermediate": {
+      "why_blocked": "An interior P-M point needs an independent strain-compatibility solver (layer/fibre integration). Building one and trusting it as a REFERENCE requires its own verification (hand-checked balanced point, published interaction chart, or a second tool). Per the EV-02 brief this is marked BLOCKED rather than fabricated. Anchors EV-COL-001/002 are delivered; the full curve is EV-03 scope."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD",
+      "rationale": "no reference yet"
+    },
+    "notes": "UNBLOCKED in EV-06. BLOCKED - not skipped-to-hide; genuinely no trustworthy independent value at EV-02.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-COL-004",
+    "module": "modules/column.py :: _calculate_pm_curve",
+    "category": "column P-M interior",
+    "description": "Interaction point at balanced / intermediate eccentricity.",
+    "inputs": {
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0,
+      "b_cm": 40.0,
+      "h_cm": 40.0,
+      "n_bars": 8,
+      "bar": "DB20"
+    },
+    "reference_method": "LEVEL_B",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 10.3",
+      "equation": "strain compatibility, eps_cu = 0.003, Whitney block"
+    },
+    "expected": {
+      "note": "Independent strain-compatibility reference supplied in EV-06: tests/validation/reference/reference_column_ev06.py (pm_point / pm_curve, math-only, no production import). The engine's _calculate_pm_curve reproduces it to rel < 1e-12 at all 46 curve points; balanced point + force equilibrium verified. Run tests/validation/run_ev06_column.py phase E."
+    },
+    "intermediate": {
+      "why_blocked": "An interior P-M point needs an independent strain-compatibility solver (layer/fibre integration). Building one and trusting it as a REFERENCE requires its own verification (hand-checked balanced point, published interaction chart, or a second tool). Per the EV-02 brief this is marked BLOCKED rather than fabricated. Anchors EV-COL-001/002 are delivered; the full curve is EV-03 scope."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD",
+      "rationale": "no reference yet"
+    },
+    "notes": "UNBLOCKED in EV-06. BLOCKED - not skipped-to-hide; genuinely no trustworthy independent value at EV-02.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-COL-005",
+    "module": "modules/column.py :: _calculate_pm_curve",
+    "category": "column P-M interior",
+    "description": "Interaction point at point near the design interaction boundary.",
+    "inputs": {
+      "fc_ksc": 240.0,
+      "fy_ksc": 4000.0,
+      "b_cm": 40.0,
+      "h_cm": 40.0,
+      "n_bars": 8,
+      "bar": "DB20"
+    },
+    "reference_method": "LEVEL_B",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2 / 10.3",
+      "equation": "strain compatibility, eps_cu = 0.003, Whitney block"
+    },
+    "expected": {
+      "note": "Independent strain-compatibility reference supplied in EV-06: tests/validation/reference/reference_column_ev06.py (pm_point / pm_curve, math-only, no production import). The engine's _calculate_pm_curve reproduces it to rel < 1e-12 at all 46 curve points; balanced point + force equilibrium verified. Run tests/validation/run_ev06_column.py phase E."
+    },
+    "intermediate": {
+      "why_blocked": "An interior P-M point needs an independent strain-compatibility solver (layer/fibre integration). Building one and trusting it as a REFERENCE requires its own verification (hand-checked balanced point, published interaction chart, or a second tool). Per the EV-02 brief this is marked BLOCKED rather than fabricated. Anchors EV-COL-001/002 are delivered; the full curve is EV-03 scope."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD",
+      "rationale": "no reference yet"
+    },
+    "notes": "UNBLOCKED in EV-06. BLOCKED - not skipped-to-hide; genuinely no trustworthy independent value at EV-02.",
+    "status": "REFERENCE_READY"
+  }
+]

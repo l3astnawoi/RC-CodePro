@@ -11,7 +11,8 @@ import math
 
 import streamlit as st
 
-from utils.aci_318m import phi, rebars, bar_area
+from utils import ui
+from utils.aci_318m import phi, rebars, bar_area, rho_max_flexure
 from utils.drawing import (draw_slab_strip, draw_u_stair_elevation,
                            draw_stair_elevation, fig_to_png_buf)
 from utils.project import get_project_info, render_report_expander
@@ -86,6 +87,23 @@ def _spacing_for(Ab_cm2, As_req_cm2, s_max_cm):
     return S, Ab_cm2 * 100.0 / S
 
 
+def _beta1_ksc(fc_ksc):
+    """Stress-block factor beta1 for f'c in ksc (ACI 318M-08 10.2.7.3, MKS
+    form): 0.85 up to 280 ksc, then -0.05 per 70 ksc, floor 0.65."""
+    if fc_ksc <= 280.0:
+        return 0.85
+    return max(0.65, 0.85 - 0.05 * (fc_ksc - 280.0) / 70.0)
+
+
+def _rho_max_ksc(fc_ksc, fy_ksc):
+    """Tension-controlled (net tensile strain 0.005) maximum reinforcement
+    ratio, MKS (ACI 318M-08 10.3.4).  As_max = rho_max * b * d; a section
+    with As > As_max has eps_t < 0.005 (and, when eps_t < 0.004, is not a
+    permitted flexural member per 10.3.5)."""
+    return (0.85 * _beta1_ksc(fc_ksc) * fc_ksc / fy_ksc
+            * 0.003 / (0.003 + 0.005))
+
+
 STAIR_TYPES = [
     "Straight Stair (บันไดช่วงตรง)",
     "U Shape Stair (บันไดหักกลับ)",
@@ -99,6 +117,9 @@ UNDER_CONSTRUCTION = "กำลังอยู่ระหว่างการ�
 
 
 def render_stair_module():
+    ui.breadcrumb("Member Design", "Stair")
+    ui.page_header("Stair Design",
+                   "Reinforced Concrete Stair Design — ACI 318M-08")
     stair_type = st.selectbox("เลือกประเภทบันได (Stair Type)", STAIR_TYPES,
                               key="stair_type")
     if stair_type == "Straight Stair (บันไดช่วงตรง)":
@@ -110,7 +131,6 @@ def render_stair_module():
 
 
 def _render_u_shape_stair():
-    st.title("การออกแบบบันไดหักกลับ (U-Shape)")
     st.caption("หนึ่งช่วงบันได — พื้นเอียงรับแรงแบบช่วงเดี่ยว พาดจากพื้นถึงชานพัก "
                "แถบกว้าง 1 ม. ตามมาตรฐาน ACI 318M-08")
 
@@ -119,34 +139,38 @@ def _render_u_shape_stair():
     # ------------------------------------------------------------------
     # Inputs
     # ------------------------------------------------------------------
-    st.subheader("ข้อมูลป้อนเข้า")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        T_cm = st.number_input("ลูกนอน T (cm)", min_value=20.0, value=25.0,
-                               step=0.5, format="%.1f", key="u_T")
-        N = int(st.number_input("จำนวนขั้น N", min_value=1, max_value=30,
-                                value=10, step=1, key="u_N"))
-        t_cm = st.number_input("ความหนาพื้นบันได t (cm)", min_value=8.0,
-                               value=15.0, step=0.5, format="%.1f", key="u_t")
-        fc_ksc = st.number_input("กำลังอัดคอนกรีต f'c (ksc)", min_value=180,
-                                 value=240, step=10, format="%d", key="u_fc")
-    with c2:
-        R_cm = st.number_input("ลูกตั้ง R (cm)", min_value=10.0, value=17.5,
-                               step=0.5, format="%.1f", key="u_R")
-        L_land = st.number_input("ความยาวชานพักแนวนอน Lland (m)", min_value=0.5,
-                                 value=1.2, step=0.05, format="%.3f", key="u_land")
-        covering_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=1.0,
-                                      value=2.0, step=0.5, format="%.1f",
-                                      key="u_cov")
-        fy_ksc = st.number_input("กำลังครากเหล็กเสริม fy (ksc)", min_value=2800,
-                                 value=4000, step=100, format="%d", key="u_fy")
-    with c3:
-        W = st.number_input("ความกว้างบันได W (m)", min_value=0.8, value=1.2,
-                            step=0.05, format="%.3f", key="u_W")
-        SDL = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
-                              min_value=0.0, value=150.0, step=10.0, key="u_sdl")
-        LL = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m²)", min_value=0.0,
-                             value=300.0, step=50.0, key="u_ll")
+    st.markdown("#### MEMBER INPUT")
+    with ui.section_card("GEOMETRY · MATERIAL · LOADS — ข้อมูลป้อนเข้า"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            T_cm = st.number_input("ลูกนอน T (cm)", min_value=20.0, value=25.0,
+                                   step=0.5, format="%.1f", key="u_T")
+            N = int(st.number_input("จำนวนขั้น N", min_value=1, max_value=30,
+                                    value=10, step=1, key="u_N"))
+            t_cm = st.number_input("ความหนาพื้นบันได t (cm)", min_value=8.0,
+                                   value=15.0, step=0.5, format="%.1f", key="u_t")
+            fc_ksc = st.number_input("กำลังอัดคอนกรีต f'c (ksc)", min_value=180,
+                                     value=240, step=10, format="%d", key="u_fc")
+        with c2:
+            R_cm = st.number_input("ลูกตั้ง R (cm)", min_value=10.0, value=17.5,
+                                   step=0.5, format="%.1f", key="u_R")
+            L_land = st.number_input("ความยาวชานพักแนวนอน Lland (m)",
+                                     min_value=0.5, value=1.2, step=0.05,
+                                     format="%.3f", key="u_land")
+            covering_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=1.0,
+                                          value=2.0, step=0.5, format="%.1f",
+                                          key="u_cov")
+            fy_ksc = st.number_input("กำลังครากเหล็กเสริม fy (ksc)",
+                                     min_value=2800, value=4000, step=100,
+                                     format="%d", key="u_fy")
+        with c3:
+            W = st.number_input("ความกว้างบันได W (m)", min_value=0.8, value=1.2,
+                                step=0.05, format="%.3f", key="u_W")
+            SDL = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
+                                  min_value=0.0, value=150.0, step=10.0,
+                                  key="u_sdl")
+            LL = st.number_input("น้ำหนักบรรทุกจร LL (kgf/m²)", min_value=0.0,
+                                 value=300.0, step=50.0, key="u_ll")
 
     t = t_cm * CM
     covering = covering_cm * CM
@@ -176,22 +200,24 @@ def _render_u_shape_stair():
     # ------------------------------------------------------------------
     # Reinforcement selection
     # ------------------------------------------------------------------
-    st.subheader("เหล็กเสริม")
-    m1, m2 = st.columns(2)
-    with m1:
-        main_size = st.selectbox("ขนาดเหล็กเสริมหลัก", U_STAIR_BARS,
-                                 index=U_STAIR_BARS.index("DB12"),
-                                 key="u_main_size")
-        main_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมหลัก (cm)",
-                                     min_value=5.0, max_value=45.0, value=15.0,
-                                     step=1.0, format="%.1f", key="u_main_sp")
-    with m2:
-        temp_size = st.selectbox("ขนาดเหล็กเสริมกันร้าว", U_STAIR_BARS,
-                                 index=U_STAIR_BARS.index("RB9"),
-                                 key="u_temp_size")
-        temp_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมกันร้าว (cm)",
-                                     min_value=5.0, max_value=45.0, value=20.0,
-                                     step=1.0, format="%.1f", key="u_temp_sp")
+    with ui.section_card("REINFORCEMENT — เหล็กเสริม"):
+        m1, m2 = st.columns(2)
+        with m1:
+            main_size = st.selectbox("ขนาดเหล็กเสริมหลัก", U_STAIR_BARS,
+                                     index=U_STAIR_BARS.index("DB12"),
+                                     key="u_main_size")
+            main_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมหลัก (cm)",
+                                         min_value=5.0, max_value=45.0,
+                                         value=15.0, step=1.0, format="%.1f",
+                                         key="u_main_sp")
+        with m2:
+            temp_size = st.selectbox("ขนาดเหล็กเสริมกันร้าว", U_STAIR_BARS,
+                                     index=U_STAIR_BARS.index("RB9"),
+                                     key="u_temp_size")
+            temp_sp_cm = st.number_input("ระยะเรียงเหล็กเสริมกันร้าว (cm)",
+                                         min_value=5.0, max_value=45.0,
+                                         value=20.0, step=1.0, format="%.1f",
+                                         key="u_temp_sp")
 
     main_area = bar_area(main_size)
     temp_area = bar_area(temp_size)
@@ -216,11 +242,14 @@ def _render_u_shape_stair():
     sp_temp_ok = temp_sp <= max_sp_temp
 
     # ------------------------------------------------------------------
-    # Load analysis
+    # Load analysis + reinforcement steps (collapsed)
     # ------------------------------------------------------------------
-    st.subheader("การวิเคราะห์น้ำหนักบรรทุกและโมเมนต์")
-    st.markdown(
-        f"""
+    st.markdown("#### DETAILED CALCULATION — การวิเคราะห์และการคำนวณ")
+    with st.expander("รายละเอียดการคำนวณทีละขั้น (Detailed calculation)",
+                     expanded=False):
+        st.markdown("**การวิเคราะห์น้ำหนักบรรทุกและโมเมนต์**")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | ช่วงพาดส่วนเอียง L_flight = N·T/100 | {L_flight:,.3f} m |
@@ -233,18 +262,18 @@ def _render_u_shape_stair():
 | น้ำหนักบรรทุกประลัย Wu = 1.2·max DL + 1.6·LL | {Wu_kg:,.1f} kgf/m² |
 | โมเมนต์ประลัย Mu = Wu·L²/8 | **{Mu * KN_TO_KGF:,.0f} kgf-m/m** |
 """
-    )
+        )
 
-    st.subheader("ขั้นตอนการคำนวณเหล็กเสริม")
-    st.markdown(
-        f"""
+        st.markdown("**ขั้นตอนการคำนวณเหล็กเสริม**")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | Ø เหล็กหลัก | {main_dia:.1f} mm |
 | ความลึกประสิทธิผล d = t − covering − Ø/2 | **{d / CM:,.2f} cm** |
 | Rn = Mu/(φ·b·d²) | {Rn / KSC_TO_MPA:,.1f} ksc |
 """
-    )
+        )
 
     if not feasible:
         st.error("หน้าตัดบางเกินไปสำหรับการเสริมเหล็กรับแรงดึงอย่างเดียว "
@@ -264,6 +293,7 @@ def _render_u_shape_stair():
         return
 
     As_design = max(As_req, As_min)
+    st.markdown("#### REINFORCEMENT / DETAIL — รายละเอียดเหล็กเสริม")
     st.markdown(
         f"""
 | รายการ | ค่า |
@@ -280,33 +310,87 @@ def _render_u_shape_stair():
     )
 
     # ------------------------------------------------------------------
-    # Verdict
+    # Verdict booleans (unchanged logic / order)
     # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
     main_req_ok = As_prov_main >= As_req
     main_min_ok = As_prov_main >= As_min
     temp_min_ok = As_prov_temp >= As_min
+    # Tension-controlled / maximum-steel limit (ACI 318M-08 10.3.4; eps_t
+    # >= 0.004 mandatory for a flexural member, 10.3.5).  As_req is sized
+    # with a fixed phi = 0.90 (in _required_as_flexure); the provided main
+    # steel must not push the waist past the tension-controlled limit.
+    As_max_main = rho_max_flexure(fc, fy) * b * d          # mm^2 / m
+    ductile_ok = As_prov_main <= As_max_main
     passed = (main_req_ok and main_min_ok and temp_min_ok
-              and sp_main_ok and sp_temp_ok)
+              and sp_main_ok and sp_temp_ok and ductile_ok)
 
-    def _s(ok):
-        return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
+    # ==================================================================
+    # DESIGN SUMMARY  (reads the existing verdict + already-computed
+    # values only — no recomputation)
+    # ==================================================================
+    st.markdown("#### DESIGN SUMMARY")
+    with st.container(border=True):
+        ss1, ss2 = st.columns([1, 3])
+        with ss1:
+            st.markdown("**STATUS**")
+            ui.status_badge("pass" if passed else "fail",
+                            "PASS" if passed else "FAIL")
+        with ss2:
+            st.caption(f"บันไดหักกลับ (U-Shape) — {N} ขั้น · ช่วงพาด "
+                       f"{L:,.3f} m · θ {theta_deg:,.1f}° · t {t_cm:,.1f} cm")
 
-    st.markdown(
-        f"""
-| การตรวจสอบ | ที่ต้องการ | ที่จัดให้ | สถานะ |
-|---|---|---|---|
-| As หลัก ≥ As,required | {As_req / 100.0:,.2f} cm²/m | {As_prov_main / 100.0:,.2f} cm²/m | {_s(main_req_ok)} |
-| As หลัก ≥ As,min | {As_min / 100.0:,.2f} cm²/m | {As_prov_main / 100.0:,.2f} cm²/m | {_s(main_min_ok)} |
-| As กันร้าว ≥ As,min | {As_min / 100.0:,.2f} cm²/m | {As_prov_temp / 100.0:,.2f} cm²/m | {_s(temp_min_ok)} |
-| ระยะเรียงหลัก ≤ ขีดจำกัด | s = {main_sp_cm:.1f} cm | {max_sp_main / CM:,.1f} cm | {_s(sp_main_ok)} |
-| ระยะเรียงกันร้าว ≤ ขีดจำกัด | s = {temp_sp_cm:.1f} cm | {max_sp_temp / CM:,.1f} cm | {_s(sp_temp_ok)} |
-"""
+        mk1, mk2, mk3, mk4 = st.columns(4)
+        with mk1:
+            ui.kpi("Mu (kgf-m/m)", f"{Mu * KN_TO_KGF:,.0f}")
+        with mk2:
+            ui.kpi("As หลักควบคุม (cm²/m)", f"{As_design / 100.0:,.2f}")
+        with mk3:
+            ui.kpi("เหล็กหลัก", f"{main_size} @ {main_sp_cm:.0f}")
+        with mk4:
+            ui.kpi("เหล็กกันร้าว", f"{temp_size} @ {temp_sp_cm:.0f}")
+
+        _sb = st.columns(5)
+        for _c, (_lab, _ok) in zip(_sb, [
+                ("As หลัก: req ≤ As ≤ max", main_req_ok and ductile_ok),
+                ("As หลัก ≥ min", main_min_ok),
+                ("As กันร้าว ≥ min", temp_min_ok),
+                ("ระยะเรียงหลัก", sp_main_ok),
+                ("ระยะเรียงกันร้าว", sp_temp_ok)]):
+            with _c:
+                st.caption(_lab)
+                ui.status_badge(bool(_ok))
+
+    # ==================================================================
+    # DESIGN CHECKS  (existing check rows — same demand / capacity /
+    # status booleans, rendered as an engineering table)
+    # ==================================================================
+    st.markdown("#### DESIGN CHECKS — ผลการตรวจสอบ")
+    checks = [
+        ("As หลัก ≥ As,required", f"{As_req / 100.0:,.2f} cm²/m",
+         f"{As_prov_main / 100.0:,.2f} cm²/m", main_req_ok),
+        ("As หลัก ≥ As,min", f"{As_min / 100.0:,.2f} cm²/m",
+         f"{As_prov_main / 100.0:,.2f} cm²/m", main_min_ok),
+        ("As กันร้าว ≥ As,min", f"{As_min / 100.0:,.2f} cm²/m",
+         f"{As_prov_temp / 100.0:,.2f} cm²/m", temp_min_ok),
+        ("ระยะเรียงหลัก ≤ ขีดจำกัด", f"s = {main_sp_cm:.1f} cm",
+         f"{max_sp_main / CM:,.1f} cm", sp_main_ok),
+        ("ระยะเรียงกันร้าว ≤ ขีดจำกัด", f"s = {temp_sp_cm:.1f} cm",
+         f"{max_sp_temp / CM:,.1f} cm", sp_temp_ok),
+        ("เหล็กหลัก ≤ As,max (tension-controlled, ACI 10.3.4)",
+         f"{As_prov_main / 100.0:,.2f} cm²/m",
+         f"{As_max_main / 100.0:,.2f} cm²/m", ductile_ok),
+    ]
+    ui.engineering_table(
+        ["การตรวจสอบ", "ที่ต้องการ", "ที่จัดให้", "สถานะ"],
+        [[name, dem, cap, "ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"]
+         for name, dem, cap, ok in checks],
+        right_from=1,
     )
 
     # ------------------------------------------------------------------
     # Elevation drawing
     # ------------------------------------------------------------------
+    st.markdown("#### DRAWING / DETAIL — รายละเอียดหน้าตัด")
     section_img = None
     try:
         section_img = draw_u_stair_elevation(
@@ -316,9 +400,11 @@ def _render_u_shape_stair():
     except Exception as exc:  # pragma: no cover
         st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
 
+    st.markdown("#### VERDICT — ผลการตรวจสอบ")
     if passed:
         st.success(f"{PASS_TXT} — ผ่านการตรวจสอบเหล็กเสริมหลักและเหล็กเสริมกันร้าว")
 
+        st.markdown("#### OUTPUT / REPORT — รายงานการคำนวณ")
         if not FONT_AVAILABLE:
             st.warning(font_status_message())
 
@@ -353,6 +439,10 @@ def _render_u_shape_stair():
         )
     else:
         reasons = []
+        if not ductile_ok:
+            reasons.append(f"As หลัก > As,max — ไม่เป็น tension-controlled "
+                           f"({As_prov_main / 100.0:,.2f} > "
+                           f"{As_max_main / 100.0:,.2f} cm²/m)")
         if not main_req_ok:
             reasons.append("As หลัก < ที่ต้องการ")
         if not main_min_ok:
@@ -367,17 +457,18 @@ def _render_u_shape_stair():
 
 
 def _render_straight_stair():
-    st.title("การออกแบบบันไดช่วงตรง (Straight Stair)")
     st.caption("ออกแบบเป็นพื้นทางเดียวเอียง (inclined one-way slab) แถบกว้าง "
                "1 เมตร ตามมาตรฐาน ACI 318M-08 — หน่วยเมตริก "
                "(cm, kgf, kgf-m, ksc, kgf/m²)")
 
     b = 100.0        # cm — a 1 m wide strip
 
+    st.markdown("#### MEMBER INPUT")
+
     # ------------------------------------------------------------------
     # 1. Geometry
     # ------------------------------------------------------------------
-    with st.expander("รูปเรขาคณิต (Geometry)", expanded=True):
+    with ui.section_card("GEOMETRY — รูปเรขาคณิต"):
         g1, g2, g3, g4 = st.columns(4)
         with g1:
             R_cm = st.number_input("ลูกตั้ง R (cm)", min_value=10.0, value=17.5,
@@ -396,7 +487,7 @@ def _render_straight_stair():
     # ------------------------------------------------------------------
     # 2. Section & Material
     # ------------------------------------------------------------------
-    with st.expander("หน้าตัดและวัสดุ (Section & Material)", expanded=True):
+    with ui.section_card("SECTION & MATERIAL — หน้าตัดและวัสดุ"):
         s1, s2, s3, s4 = st.columns(4)
         with s1:
             t_cm = st.number_input("ความหนาท้องบันได t (cm)", min_value=8.0,
@@ -416,7 +507,7 @@ def _render_straight_stair():
     # ------------------------------------------------------------------
     # 3. Loads
     # ------------------------------------------------------------------
-    with st.expander("แรงกระทำ (Loads)", expanded=True):
+    with ui.section_card("LOADS — แรงกระทำ"):
         l1, l2 = st.columns(2)
         with l1:
             SDL = st.number_input("น้ำหนักบรรทุกคงที่เพิ่มเติม SDL (kgf/m²)",
@@ -429,7 +520,7 @@ def _render_straight_stair():
     # ------------------------------------------------------------------
     # 4. Reinforcement
     # ------------------------------------------------------------------
-    with st.expander("เหล็กเสริม (Reinforcement)", expanded=True):
+    with ui.section_card("REINFORCEMENT — เหล็กเสริม"):
         r1, r2 = st.columns(2)
         with r1:
             main_size = st.selectbox("เหล็กเสริมหลัก (ตามยาว) — ขนาด",
@@ -476,6 +567,13 @@ def _render_straight_stair():
     As_temp_min = temp_ratio * b * t             # cm2 / m
     As_main = max(As_req or 0.0, As_temp_min)
 
+    # Tension-controlled / maximum-steel limit (ACI 318M-08 10.3.4;
+    # eps_t >= 0.004 is mandatory for a flexural member per 10.3.5).
+    # As_main above is sized with a fixed phi = 0.90 (in _as_flexure_ksc),
+    # valid ONLY while the waist stays tension-controlled (As <= As_max).
+    As_max_main = _rho_max_ksc(fc, fy) * b * d
+    ductile_ok = As_main <= As_max_main
+
     s_max_main = min(3.0 * t, 45.0)              # ACI 13.3.2 / 10.5.4
     s_max_temp = min(5.0 * t, 45.0)             # ACI 7.12.2.2
     S_main, Asp_main = _spacing_for(Ab_main, As_main, s_max_main)
@@ -483,14 +581,81 @@ def _render_straight_stair():
 
     main_ok = 7.5 <= S_main <= s_max_main
     temp_ok = 7.5 <= S_temp <= s_max_temp
-    passed = main_ok and temp_ok
+    passed = main_ok and temp_ok and ductile_ok
 
-    # ------------------------------------------------------------------
-    # Calculation breakdown
-    # ------------------------------------------------------------------
-    st.subheader("การวิเคราะห์น้ำหนักบรรทุก")
-    st.markdown(
-        f"""
+    # ==================================================================
+    # DESIGN SUMMARY  (reads the existing verdict + already-computed
+    # values only — no recomputation)
+    # ==================================================================
+    st.markdown("#### DESIGN SUMMARY")
+    with st.container(border=True):
+        ss1, ss2 = st.columns([1, 3])
+        with ss1:
+            st.markdown("**STATUS**")
+            ui.status_badge("pass" if passed else "fail",
+                            "PASS" if passed else "FAIL")
+        with ss2:
+            st.caption(f"บันไดช่วงตรง — {N} ขั้น · ช่วงพาดแนวราบ Lx {Lx:,.2f} m "
+                       f"· θ {math.degrees(theta):,.1f}° · t {t:,.1f} cm")
+
+        mk1, mk2, mk3, mk4 = st.columns(4)
+        with mk1:
+            ui.kpi("Mu (kgf-m)", f"{Mu:,.0f}")
+        with mk2:
+            ui.kpi("As หลักควบคุม (cm²/m)", f"{As_main:,.2f}")
+        with mk3:
+            ui.kpi(f"เหล็กหลัก — {main_size}",
+                   f"@ {S_main:,.1f} / {s_max_main:,.1f} cm")
+        with mk4:
+            ui.kpi(f"เหล็กกันร้าว — {temp_size}",
+                   f"@ {S_temp:,.1f} / {s_max_temp:,.1f} cm")
+
+        sb1, sb2 = st.columns(2)
+        with sb1:
+            st.caption(f"ระยะเรียงเหล็กหลัก — {main_size} "
+                       f"(S {S_main:,.1f} / s_max {s_max_main:,.1f} cm)")
+            ui.status_badge(bool(main_ok))
+        with sb2:
+            st.caption(f"ระยะเรียงเหล็กกันร้าว — {temp_size} "
+                       f"(S {S_temp:,.1f} / s_max {s_max_temp:,.1f} cm)")
+            ui.status_badge(bool(temp_ok))
+
+    # ==================================================================
+    # DESIGN CHECKS  (existing check tuples — one source, rendered here
+    # and passed unchanged to the PDF report)
+    # ==================================================================
+    st.markdown("#### DESIGN CHECKS — ผลการตรวจสอบ")
+    checks = [
+        ("ระยะเรียงเหล็กหลัก (S ≤ min(3t,45))", f"{S_main:.1f} cm",
+         f"{s_max_main:.1f} cm", main_ok),
+        ("ระยะเรียงเหล็กกันร้าว (S ≤ min(5t,45))", f"{S_temp:.1f} cm",
+         f"{s_max_temp:.1f} cm", temp_ok),
+        ("As เหล็กหลักที่จัดให้ ≥ ที่ต้องการ",
+         f"{Asp_main:.2f} cm²/m", f"{As_main:.2f} cm²/m",
+         Asp_main >= As_main - 1e-6),
+        ("เหล็กหลัก ≤ As,max (tension-controlled, ACI 10.3.4)",
+         f"{As_main:.2f} cm²/m", f"{As_max_main:.2f} cm²/m", ductile_ok),
+    ]
+    ui.engineering_table(
+        ["รายการตรวจสอบ", "Demand", "Capacity", "สถานะ"],
+        [[name, dem, cap, "ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"]
+         for name, dem, cap, ok in checks],
+        right_from=1,
+    )
+    if not ductile_ok:
+        st.warning("เหล็กหลัก > As,max — ท้องบันไดบางเกินไป/รับโมเมนต์มากเกินไป "
+                   "(ไม่เป็น tension-controlled ตาม ACI 318M-08 10.3.4/10.3.5) "
+                   "— เพิ่มความหนาท้องบันได t")
+
+    # ==================================================================
+    # DETAILED CALCULATION  (existing breakdown tables, collapsed)
+    # ==================================================================
+    st.markdown("#### DETAILED CALCULATION — การวิเคราะห์และการคำนวณ")
+    with st.expander("รายละเอียดการคำนวณทีละขั้น (Detailed calculation)",
+                     expanded=False):
+        st.markdown("**การวิเคราะห์น้ำหนักบรรทุก**")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | ช่วงพาดในแนวราบ Lx = N·T/100 = {N}·{T:.1f}/100 | **{Lx:,.2f} m** |
@@ -501,11 +666,11 @@ def _render_straight_stair():
 | น้ำหนักบรรทุกประลัย Wu = 1.2·DL + 1.6·LL | **{Wu:,.1f} kgf/m²** |
 | โมเมนต์ประลัย Mu = Wu·Lx²/8 (ต่อแถบ 1 ม.) | **{Mu:,.0f} kgf-m** |
 """
-    )
+        )
 
-    st.subheader("ขั้นตอนการคำนวณ")
-    st.markdown(
-        f"""
+        st.markdown("**ขั้นตอนการคำนวณ**")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | ความลึกประสิทธิผล d = t − covering − Ø_หลัก/2 | **{d:,.2f} cm** |
@@ -518,29 +683,12 @@ def _render_straight_stair():
 | ระยะเรียงที่จัดให้ — เหล็กหลัก ({main_size}) | **{S_main:,.1f} cm** (As≈{Asp_main:,.2f} cm²/m) |
 | ระยะเรียงที่จัดให้ — เหล็กกันร้าว ({temp_size}) | **{S_temp:,.1f} cm** (As≈{Asp_temp:,.2f} cm²/m) |
 """
-    )
+        )
 
-    # ------------------------------------------------------------------
-    # Metric cards
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
-    c_main, c_temp = st.columns(2)
-    with c_main:
-        st.markdown("#### ระยะเรียงเหล็กหลัก")
-        st.metric(f"S / s_max (cm) — {main_size}",
-                  f"{S_main:,.1f} / {s_max_main:,.1f}")
-        (st.success if main_ok else st.error)(
-            (PASS_TXT if main_ok else FAIL_TXT) + " — เหล็กหลัก")
-    with c_temp:
-        st.markdown("#### ระยะเรียงเหล็กกันร้าว")
-        st.metric(f"S / s_max (cm) — {temp_size}",
-                  f"{S_temp:,.1f} / {s_max_temp:,.1f}")
-        (st.success if temp_ok else st.error)(
-            (PASS_TXT if temp_ok else FAIL_TXT) + " — เหล็กกันร้าว")
-
-    # ------------------------------------------------------------------
-    # CAD side elevation
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # DRAWING / DETAIL  — CAD side elevation
+    # ==================================================================
+    st.markdown("#### DRAWING / DETAIL — รูปด้านบันได")
     section_img = None
     try:
         fig = draw_stair_elevation(
@@ -553,10 +701,10 @@ def _render_straight_stair():
     except Exception as exc:  # pragma: no cover
         st.warning(f"ไม่สามารถสร้างภาพรูปด้านได้: {exc}")
 
-    # ------------------------------------------------------------------
-    # Overall verdict
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบรวม")
+    # ==================================================================
+    # VERDICT  (existing logic, existing text)
+    # ==================================================================
+    st.markdown("#### VERDICT — ผลการตรวจสอบรวม")
     if passed:
         st.success(f"{PASS_TXT} — ระยะเรียงเหล็กหลักและเหล็กกันร้าวผ่านเกณฑ์ "
                    f"ACI 318M-08")
@@ -568,9 +716,16 @@ def _render_straight_stair():
         if not temp_ok:
             fails.append(f"ระยะเรียงเหล็กกันร้าว S = {S_temp:,.1f} cm "
                          f"(เกณฑ์ 7.5–{s_max_temp:,.1f} cm)")
+        if not ductile_ok:
+            fails.append(f"เหล็กหลัก As = {As_main:,.2f} > As,max = "
+                         f"{As_max_main:,.2f} cm²/m — ไม่เป็น tension-"
+                         f"controlled (ACI 10.3.4/10.3.5)")
         st.error(f"{FAIL_TXT} — " + "; ".join(fails))
 
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # OUTPUT / REPORT
+    # ==================================================================
+    st.markdown("#### OUTPUT / REPORT — รายงานการคำนวณ")
     render_report_expander(
         key="stair_straight", filename="stair_design_report.pdf",
         title="การออกแบบบันไดคอนกรีตเสริมเหล็ก (ACI 318M-08)",
@@ -590,15 +745,7 @@ def _render_straight_stair():
             ("เหล็กเสริมหลัก", f"{main_size} @ {S_main:.1f} cm"),
             ("เหล็กกันร้าว", f"{temp_size} @ {S_temp:.1f} cm"),
         ],
-        checks=[
-            ("ระยะเรียงเหล็กหลัก (S ≤ min(3t,45))", f"{S_main:.1f} cm",
-             f"{s_max_main:.1f} cm", main_ok),
-            ("ระยะเรียงเหล็กกันร้าว (S ≤ min(5t,45))", f"{S_temp:.1f} cm",
-             f"{s_max_temp:.1f} cm", temp_ok),
-            ("As เหล็กหลักที่จัดให้ ≥ ที่ต้องการ",
-             f"{Asp_main:.2f} cm²/m", f"{As_main:.2f} cm²/m",
-             Asp_main >= As_main - 1e-6),
-        ],
+        checks=checks,
         figures=[("รูปด้านบันได (Side Elevation)", section_img)],
         status=passed,
         summary=("ระยะเรียงเหล็กหลักและเหล็กกันร้าวผ่านเกณฑ์ ACI 318M-08"

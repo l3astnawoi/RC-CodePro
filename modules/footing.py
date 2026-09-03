@@ -21,6 +21,7 @@ import math
 
 import streamlit as st
 
+from utils import ui
 from utils.aci_318m import phi, rebars
 from utils.drawing import draw_footing_plan, draw_pile_cap_plan
 from utils.project import get_project_info, render_report_expander
@@ -82,7 +83,9 @@ def _flexure_as(Mu_Nmm, b_mm, d_mm, fc, fy):
 
 
 def render_footing_module():
-    st.title("การออกแบบฐานราก")
+    ui.breadcrumb("Member Design", "Footing")
+    ui.page_header("Footing Design",
+                   "Foundation Design — ACI 318M-08 (หน่วยเมตริก)")
     st.caption("ฐานรากแผ่ · ฐานเสาเข็ม · ฐานเสาเข็มเยื้องศูนย์ — ตามมาตรฐาน "
                "ACI 318M-08 (หน่วยเมตริก)")
 
@@ -124,7 +127,10 @@ def _render_isolated_footing():
     # ------------------------------------------------------------------
     # Inputs
     # ------------------------------------------------------------------
-    st.subheader("ข้อมูลป้อนเข้า")
+    st.markdown("#### MEMBER INPUT")
+    st.caption("ฐานรากเดี่ยว — ตรวจสอบกำลังแบกทานดิน แรงเฉือนทะลุสองทาง "
+               "แรงเฉือนคานทางเดียว การดัด เหล็กขั้นต่ำ และระยะเรียง ตามมาตรฐาน "
+               "ACI 318M-08 — หน่วยเมตริก (cm, kgf, kgf-m, ksc, kgf/m²)")
     c1, c2, c3 = st.columns(3)
     with c1:
         P_DL_kgf = st.number_input("น้ำหนักบรรทุกคงที่จากเสา P_DL (kgf)",
@@ -198,7 +204,7 @@ def _render_isolated_footing():
     # The long-direction bars carry the larger moment and sit in the bottom
     # layer; the short-direction bars rest on top of them.
     # ------------------------------------------------------------------
-    st.subheader("เหล็กเสริม (แยกทิศทาง)")
+    st.markdown("#### REINFORCEMENT — เหล็กเสริม (แยกทิศทาง)")
     _bar_opts = list(rebars.keys())
     rl1, rl2 = st.columns(2)
     with rl1:
@@ -272,25 +278,6 @@ def _render_isolated_footing():
         c_long, c_short = cx, cy
     else:                                              # long_dim = L (Y)
         c_long, c_short = cy, cx
-
-    # ------------------------------------------------------------------
-    # Prominent display of the computed loads
-    # ------------------------------------------------------------------
-    mc1, mc2, mc3 = st.columns(3)
-    with mc1:
-        st.metric("น้ำหนักฐานรากเอง Wf", f"{Wf_kgf:,.0f} kgf")
-    with mc2:
-        st.metric("แรงประลัยรวม Pu (รวม Wf)", f"{Pu_kgf:,.0f} kgf")
-    with mc3:
-        st.metric("หน่วยแรงประลัยสุทธิ qu,net", f"{qu_net_kgf:,.0f} kgf/m²")
-    st.info(
-        f"Wf = B·L·h·2400 = {B_m:.2f}·{L_m:.2f}·{h_cm / 100.0:.3f}·2400 = "
-        f"{Wf_kgf:,.1f} kgf  |  "
-        f"Total DL = P_DL + Wf = {Total_DL_kgf:,.1f} kgf  |  "
-        f"Pu = 1.2·Total DL + 1.6·P_LL = {Pu_kgf:,.1f} kgf  |  "
-        f"qu,net = (1.2·P_DL + 1.6·P_LL)/(B·L) = "
-        f"{qu_net_kgf:,.1f} kgf/m²"
-    )
 
     # ------------------------------------------------------------------
     # 2. Two-way (punching) shear — critical section d/2 from column face
@@ -379,12 +366,62 @@ def _render_isolated_footing():
     def _s0(ok):
         return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
 
-    # ------------------------------------------------------------------
-    # Calculation steps
-    # ------------------------------------------------------------------
-    st.subheader("ขั้นตอนการคำนวณ")
-    st.markdown(
-        f"""
+    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
+
+    # ==================================================================
+    # DESIGN SUMMARY  (reads the existing verdict + already-computed
+    # values only — no recomputation)
+    # ==================================================================
+    st.markdown("#### DESIGN SUMMARY")
+    with st.container(border=True):
+        ss1, ss2 = st.columns([1, 3])
+        with ss1:
+            st.markdown("**STATUS**")
+            ui.status_badge("pass" if passed else "fail",
+                            "PASS" if passed else "FAIL")
+        with ss2:
+            st.caption(
+                ("เสากลม Ø " + format(Dc / CM, ",.1f") + " cm  (c_eq = "
+                 + format(cx / CM, ",.2f") + " cm, ACI 15.3)") if is_circular
+                else ("เสาสี่เหลี่ยม " + format(cx / CM, ",.1f") + " × "
+                      + format(cy / CM, ",.1f") + " cm"))
+
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            st.metric("น้ำหนักฐานรากเอง Wf", f"{Wf_kgf:,.0f} kgf")
+        with mc2:
+            st.metric("แรงประลัยรวม Pu (รวม Wf)", f"{Pu_kgf:,.0f} kgf")
+        with mc3:
+            st.metric("หน่วยแรงประลัยสุทธิ qu,net", f"{qu_net_kgf:,.0f} kgf/m²")
+        st.info(
+            f"Wf = B·L·h·2400 = {B_m:.2f}·{L_m:.2f}·{h_cm / 100.0:.3f}·2400 = "
+            f"{Wf_kgf:,.1f} kgf  |  "
+            f"Total DL = P_DL + Wf = {Total_DL_kgf:,.1f} kgf  |  "
+            f"Pu = 1.2·Total DL + 1.6·P_LL = {Pu_kgf:,.1f} kgf  |  "
+            f"qu,net = (1.2·P_DL + 1.6·P_LL)/(B·L) = "
+            f"{qu_net_kgf:,.1f} kgf/m²"
+        )
+
+        _sb = st.columns(5)
+        for _c, (_lab, _ok) in zip(_sb, [
+                ("แบกทานดิน", bearing_ok),
+                ("เฉือนทะลุ", punch_ok),
+                ("เฉือนคาน", beam_long_ok and beam_short_ok),
+                ("การดัด", flex_long_ok and flex_short_ok),
+                ("เหล็ก / ระยะเรียง", asmin_long_ok and asmin_short_ok
+                 and sp_long_ok and sp_short_ok)]):
+            with _c:
+                st.caption(_lab)
+                ui.status_badge(bool(_ok))
+
+    # ==================================================================
+    # DETAILED CALCULATION  (existing step-by-step tables, collapsed)
+    # ==================================================================
+    st.markdown("#### DETAILED CALCULATION — ขั้นตอนการคำนวณ")
+    with st.expander("รายละเอียดการคำนวณทีละขั้น (Detailed calculation)",
+                     expanded=False):
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | น้ำหนักบรรทุกคงที่จากเสา P_DL | {P_DL_kgf:,.0f} kgf |
@@ -400,12 +437,12 @@ def _render_isolated_footing():
 | หน่วยแรงดินที่ยอมให้ qa | {q_a_ton * 1000.0:,.0f} kgf/m² ({q_a_ton:,.2f} ตัน/ตร.ม.) |
 | หน่วยแรงประลัยสุทธิ qu,net = (1.2·P_DL+1.6·P_LL)/(B·L) | **{qu_net_kgf:,.1f} kgf/m²** |
 """
-    )
+        )
 
-    st.markdown("**แรงเฉือนทะลุ (สองทาง)** — หน้าตัดวิกฤตที่ระยะ d/2 จากผิวเสา "
-                "(ใช้ qu,net)")
-    st.markdown(
-        f"""
+        st.markdown("**แรงเฉือนทะลุ (สองทาง)** — หน้าตัดวิกฤตที่ระยะ d/2 จากผิวเสา "
+                    "(ใช้ qu,net)")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | เส้นรอบรูปวิกฤต b₀ = 2(cx+d) + 2(cy+d) | {bo:,.0f} mm |
@@ -414,12 +451,12 @@ def _render_isolated_footing():
 | vc = min(0.17(1+2/β_c), 0.083(α_s·d/b₀+2), 0.33)·√f'c | {vc_punch / KSC_TO_MPA:,.1f} ksc |
 | φVc = 0.75·vc·b₀·d (d = d_avg) | **{phiVc_punch / 1000.0 * KN_TO_KGF:,.0f} kgf** |
 """
-    )
+        )
 
-    st.markdown("**แรงเฉือนคาน (ทางเดียว)** — ตรวจสอบทั้งสองทิศทาง ที่ระยะ d "
-                "จากผิวเสา (ใช้ qu,net)")
-    st.markdown(
-        f"""
+        st.markdown("**แรงเฉือนคาน (ทางเดียว)** — ตรวจสอบทั้งสองทิศทาง ที่ระยะ d "
+                    "จากผิวเสา (ใช้ qu,net)")
+        st.markdown(
+            f"""
 | รายการ | ด้านยาว (Long) | ด้านสั้น (Short) |
 |---|---|---|
 | ระยะยื่นเลยหน้าตัด av = (ด้าน − c_เสา)/2 − d | {av_long / CM:,.2f} cm | {av_short / CM:,.2f} cm |
@@ -427,11 +464,11 @@ def _render_isolated_footing():
 | φVc = 0.75·0.17·√f'c·(กว้างต้าน)·d | {phiVc_v_long / 1000.0 * KN_TO_KGF:,.0f} kgf | {phiVc_v_short / 1000.0 * KN_TO_KGF:,.0f} kgf |
 | สถานะ | {_s0(beam_long_ok)} | {_s0(beam_short_ok)} |
 """
-    )
+        )
 
-    st.markdown("**การดัด (ACI 15.4)** — โมเมนต์ที่ผิวเสา แยกสองทิศทาง (ใช้ qu,net)")
-    st.markdown(
-        f"""
+        st.markdown("**การดัด (ACI 15.4)** — โมเมนต์ที่ผิวเสา แยกสองทิศทาง (ใช้ qu,net)")
+        st.markdown(
+            f"""
 | รายการ | ด้านยาว (Long) | ด้านสั้น (Short) |
 |---|---|---|
 | ความยาวยื่น Lc = (ด้าน − c_เสา)/2 | {Lc_long / CM:,.2f} cm | {Lc_short / CM:,.2f} cm |
@@ -444,41 +481,53 @@ def _render_isolated_footing():
 | As ที่จัดให้ = จำนวน × พื้นที่เส้น | **{As_prov_long / 100.0:,.2f} cm²** | **{As_prov_short / 100.0:,.2f} cm²** |
 | ระยะเรียงสูงสุด s_max = min(3h, 450 mm) = {s_max / CM:,.1f} cm | {_s0(sp_long_ok)} | {_s0(sp_short_ok)} |
 """
-    )
+        )
     if not feasible:
         st.error("ฐานรากบางเกินไปสำหรับการเสริมเหล็กรับแรงดึงอย่างเดียว "
                  "(1 − 2Rn/0.85f'c < 0) — เพิ่ม h หรือ f'c")
 
-    # ------------------------------------------------------------------
-    # Checks summary
-    # ------------------------------------------------------------------
-    st.subheader("การตรวจสอบการออกแบบ")
-
-    def _s(ok):
-        return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
-
-    _al = f"{As_req_long / 100.0:,.2f}" if feas_long else "—"
-    _as_ = f"{As_req_short / 100.0:,.2f}" if feas_short else "—"
-    st.markdown(
-        f"""
-| การตรวจสอบ | แรงที่กระทำ | กำลังต้านทาน / ขีดจำกัด | สถานะ |
-|---|---|---|---|
-| กำลังแบกทานดิน (ใช้งาน) | q = {q_service_kgf:,.1f} kgf/m² | qa = {q_a_ton * 1000.0:,.0f} kgf/m² | {_s(bearing_ok)} |
-| แรงเฉือนทะลุ (สองทาง) | Vu = {Vup / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_punch / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(punch_ok)} |
-| แรงเฉือนคาน — ด้านยาว | Vu = {Vu_long / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_v_long / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(beam_long_ok)} |
-| แรงเฉือนคาน — ด้านสั้น | Vu = {Vu_short / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_v_short / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(beam_short_ok)} |
-| การดัด — ด้านยาว | As,req = {_al} cm² | As,prov = {As_prov_long / 100.0:,.2f} cm² | {_s(flex_long_ok)} |
-| การดัด — ด้านสั้น | As,req = {_as_} cm² | As,prov = {As_prov_short / 100.0:,.2f} cm² | {_s(flex_short_ok)} |
-| เหล็กขั้นต่ำ — ด้านยาว | As,min = {As_min_long / 100.0:,.2f} cm² | As,prov = {As_prov_long / 100.0:,.2f} cm² | {_s(asmin_long_ok)} |
-| เหล็กขั้นต่ำ — ด้านสั้น | As,min = {As_min_short / 100.0:,.2f} cm² | As,prov = {As_prov_short / 100.0:,.2f} cm² | {_s(asmin_short_ok)} |
-| ระยะเรียง — ด้านยาว | S = {s_long / CM:,.1f} cm | s_max = {s_max / CM:,.1f} cm | {_s(sp_long_ok)} |
-| ระยะเรียง — ด้านสั้น | S = {s_short / CM:,.1f} cm | s_max = {s_max / CM:,.1f} cm | {_s(sp_short_ok)} |
-"""
+    # ==================================================================
+    # DESIGN CHECKS  (one list of demand/capacity tuples — rendered here
+    # and passed unchanged to the PDF report)
+    # ==================================================================
+    st.markdown("#### DESIGN CHECKS — การตรวจสอบการออกแบบ")
+    checks = [
+        ("กำลังแบกทานดิน (ใช้งาน)", f"{q_service_kgf:,.0f} kgf/m²",
+         f"{q_a_ton * 1000.0:,.0f} kgf/m²", bearing_ok),
+        ("แรงเฉือนทะลุ สองทาง (Vu ≤ φVc)", f"{Vup * _kf:,.0f} kgf",
+         f"{phiVc_punch * _kf:,.0f} kgf", punch_ok),
+        ("แรงเฉือนคาน — ด้านยาว", f"{Vu_long * _kf:,.0f} kgf",
+         f"{phiVc_v_long * _kf:,.0f} kgf", beam_long_ok),
+        ("แรงเฉือนคาน — ด้านสั้น", f"{Vu_short * _kf:,.0f} kgf",
+         f"{phiVc_v_short * _kf:,.0f} kgf", beam_short_ok),
+        ("การดัด — ด้านยาว (As,prov ≥ As,req)",
+         f"{As_prov_long / 100.0:,.2f} cm²",
+         (f"{As_req_long / 100.0:,.2f} cm²" if feas_long else "—"),
+         flex_long_ok),
+        ("การดัด — ด้านสั้น (As,prov ≥ As,req)",
+         f"{As_prov_short / 100.0:,.2f} cm²",
+         (f"{As_req_short / 100.0:,.2f} cm²" if feas_short else "—"),
+         flex_short_ok),
+        ("เหล็กขั้นต่ำ — ด้านยาว", f"{As_prov_long / 100.0:,.2f} cm²",
+         f"{As_min_long / 100.0:,.2f} cm²", asmin_long_ok),
+        ("เหล็กขั้นต่ำ — ด้านสั้น", f"{As_prov_short / 100.0:,.2f} cm²",
+         f"{As_min_short / 100.0:,.2f} cm²", asmin_short_ok),
+        ("ระยะเรียง — ด้านยาว (S ≤ s_max)", f"{s_long / CM:,.1f} cm",
+         f"{s_max / CM:,.1f} cm", sp_long_ok),
+        ("ระยะเรียง — ด้านสั้น (S ≤ s_max)", f"{s_short / CM:,.1f} cm",
+         f"{s_max / CM:,.1f} cm", sp_short_ok),
+    ]
+    ui.engineering_table(
+        ["รายการตรวจสอบ", "Demand", "Capacity", "สถานะ"],
+        [[name, dem, cap, "ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"]
+         for name, dem, cap, ok in checks],
+        right_from=1,
     )
 
-    # ------------------------------------------------------------------
-    # Visual detailing — plan + elevation (B, L, h, cx, cy in mm)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # DRAWING / DETAIL  — plan + elevation (B, L, h, cx, cy in mm)
+    # ==================================================================
+    st.markdown("#### DRAWING / DETAIL — รายละเอียดหน้าตัด")
     # Map long/short mats onto the drawing's X (vertical grid) and Y
     # (horizontal grid) directions.
     if L >= B:                       # long dimension is L (Y) -> long bars run // Y
@@ -498,10 +547,10 @@ def _render_isolated_footing():
     except Exception as exc:  # pragma: no cover - drawing must never break the page
         st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
 
-    # ------------------------------------------------------------------
-    # Verdict
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
+    # ==================================================================
+    # VERDICT  (existing logic, existing text)
+    # ==================================================================
+    st.markdown("#### VERDICT — ผลการตรวจสอบ")
     if passed:
         st.success(
             f"{PASS_TXT} — ผ่านทุกการตรวจสอบ: กำลังแบกทานดิน แรงเฉือนทะลุ "
@@ -545,8 +594,10 @@ def _render_isolated_footing():
                           f"s_max = {s_max / CM:,.1f} cm (เพิ่มจำนวนเส้น)")
         st.error(f"{FAIL_TXT} — " + "; ".join(failed))
 
-    # ------------------------------------------------------------------
-    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
+    # ==================================================================
+    # OUTPUT / REPORT  (report engine unchanged)
+    # ==================================================================
+    st.markdown("#### OUTPUT / REPORT — รายงานการคำนวณ")
     _colsz = (f"กลม Ø {Dc / CM:,.1f} cm" if is_circular
               else f"{cx / CM:,.1f} × {cy / CM:,.1f} cm")
     render_report_expander(
@@ -565,32 +616,7 @@ def _render_isolated_footing():
             ("เหล็กด้านยาว", f"{n_long} - {size_long}"),
             ("เหล็กด้านสั้น", f"{n_short} - {size_short}"),
         ],
-        checks=[
-            ("กำลังแบกทานดิน (ใช้งาน)", f"{q_service_kgf:,.0f} kgf/m²",
-             f"{q_a_ton * 1000.0:,.0f} kgf/m²", bearing_ok),
-            ("แรงเฉือนทะลุ สองทาง (Vu ≤ φVc)", f"{Vup * _kf:,.0f} kgf",
-             f"{phiVc_punch * _kf:,.0f} kgf", punch_ok),
-            ("แรงเฉือนคาน — ด้านยาว", f"{Vu_long * _kf:,.0f} kgf",
-             f"{phiVc_v_long * _kf:,.0f} kgf", beam_long_ok),
-            ("แรงเฉือนคาน — ด้านสั้น", f"{Vu_short * _kf:,.0f} kgf",
-             f"{phiVc_v_short * _kf:,.0f} kgf", beam_short_ok),
-            ("การดัด — ด้านยาว (As,prov ≥ As,req)",
-             f"{As_prov_long / 100.0:,.2f} cm²",
-             (f"{As_req_long / 100.0:,.2f} cm²" if feas_long else "—"),
-             flex_long_ok),
-            ("การดัด — ด้านสั้น (As,prov ≥ As,req)",
-             f"{As_prov_short / 100.0:,.2f} cm²",
-             (f"{As_req_short / 100.0:,.2f} cm²" if feas_short else "—"),
-             flex_short_ok),
-            ("เหล็กขั้นต่ำ — ด้านยาว", f"{As_prov_long / 100.0:,.2f} cm²",
-             f"{As_min_long / 100.0:,.2f} cm²", asmin_long_ok),
-            ("เหล็กขั้นต่ำ — ด้านสั้น", f"{As_prov_short / 100.0:,.2f} cm²",
-             f"{As_min_short / 100.0:,.2f} cm²", asmin_short_ok),
-            ("ระยะเรียง — ด้านยาว (S ≤ s_max)", f"{s_long / CM:,.1f} cm",
-             f"{s_max / CM:,.1f} cm", sp_long_ok),
-            ("ระยะเรียง — ด้านสั้น (S ≤ s_max)", f"{s_short / CM:,.1f} cm",
-             f"{s_max / CM:,.1f} cm", sp_short_ok),
-        ],
+        checks=checks,
         figures=[("รายละเอียดฐานราก (Plan + Elevation)", section_img)],
         status=passed,
         summary=("ฐานรากเดี่ยวผ่านทุกการตรวจสอบ" if passed
@@ -663,7 +689,10 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
     is_eccentric : True for the F1E-F9E tab — exposes ex / ey inputs and
                    distributes the pile reactions elastically.
     """
-    st.subheader("ข้อมูลป้อนเข้า")
+    st.markdown("#### MEMBER INPUT")
+    st.caption("ฐานเสาเข็ม (การคำนวณเบื้องต้น) — กระจายแรงเสาเข็มแบบยืดหยุ่น "
+               "ตรวจสอบแรงในเข็ม/แรงถอน แรงเฉือนทะลุสองทาง แรงเฉือนหัวเข็ม "
+               "แรงเฉือนคานทางเดียว การดัด และระยะเรียง ตามมาตรฐาน ACI 318M-08")
     c1, c2, c3 = st.columns(3)
     with c1:
         P_DL_kgf = st.number_input("น้ำหนักบรรทุกคงที่จากเสา P_DL (kgf)",
@@ -753,7 +782,7 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
                   else "circ")
     pile_shape_th = pile_shape.split(" (")[-1].rstrip(")")
 
-    st.subheader("เหล็กเสริม (แยกทิศทาง)")
+    st.markdown("#### REINFORCEMENT — เหล็กเสริม (แยกทิศทาง)")
     _bopts = list(rebars.keys())
     _rl1, _rl2 = st.columns(2)
     with _rl1:
@@ -1042,15 +1071,29 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
     bar_sx_cm = s_x / CM
     bar_sy_cm = s_y / CM
 
+    # The elastic pile-group distribution R_i = P/n + M_y x_i/Σx² +
+    # M_x y_i/Σy² can only carry a moment about an axis that has pile
+    # offset in the perpendicular direction.  For n = 1 (Σx² = Σy² = 0) and
+    # n = 2 (piles colinear on Y, Σx² = 0) an applied column eccentricity
+    # about the un-resisted axis is silently dropped by the guards above —
+    # the cap would rotate.  Such a configuration must NOT report PASS.
+    ecc_resolvable_ok = not ((ex_mm != 0.0 and sum_x2 == 0.0)
+                             or (ey_mm != 0.0 and sum_y2 == 0.0))
+
     passed = (reaction_ok and uplift_ok and punch_ok and pile_punch_ok
               and beam_long_ok and beam_short_ok
               and flex_long_ok and flex_short_ok
               and asmin_long_ok and asmin_short_ok
-              and sp_long_ok and sp_short_ok)
+              and sp_long_ok and sp_short_ok
+              and ecc_resolvable_ok)
 
     def _s0(ok):
         return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
 
+    if not ecc_resolvable_ok:
+        st.error("❌ กลุ่มเสาเข็มนี้ต้านโมเมนต์จากการเยื้องศูนย์ของเสาไม่ได้ "
+                 "(เสาเข็มเรียงเป็นแนวเดียว/ต้นเดียว — ไม่มีระยะยื่นในทิศตั้งฉาก) "
+                 "— เพิ่มจำนวนเสาเข็ม จัดผังใหม่ หรือย้ายเสาให้อยู่ศูนย์กลาง")
     if not uplift_ok:
         st.warning(f"⚠️ เกิดแรงถอน (uplift) ที่เสาเข็ม — Rmin = "
                    f"{R_min_kgf:,.0f} kgf/ต้น < 0 : ตรวจสอบระยะเยื้องศูนย์ "
@@ -1059,10 +1102,51 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
         st.warning(f"⚠️ แรงในเสาเข็มสูงสุด Rmax,total = {R_max_kgf:,.0f} "
                    f"kgf/ต้น เกินกำลังรับปลอดภัย {pile_cap_kgf:,.0f} kgf/ต้น")
 
-    # ------------------------------------------------------------------
-    # Calculation steps
-    # ------------------------------------------------------------------
-    st.subheader("ขั้นตอนการคำนวณ")
+    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
+
+    # ==================================================================
+    # DESIGN SUMMARY  (reads the existing verdict + already-computed
+    # values only — no recomputation)
+    # ==================================================================
+    st.markdown("#### DESIGN SUMMARY")
+    with st.container(border=True):
+        ss1, ss2 = st.columns([1, 3])
+        with ss1:
+            st.markdown("**STATUS**")
+            ui.status_badge("pass" if passed else "fail",
+                            "PASS" if passed else "FAIL")
+        with ss2:
+            st.caption(f"ฐานเสาเข็ม {n_piles} ต้น · เสาเข็ม {pile_shape_th} "
+                       f"Ø {pile_size_cm:,.1f} cm · ฐานราก "
+                       f"{cap_W / CM:,.0f} × {cap_L / CM:,.0f} cm")
+
+        mk1, mk2, mk3, mk4 = st.columns(4)
+        with mk1:
+            ui.kpi("Pu,net (kgf)", f"{Pu_net_kgf:,.0f}")
+        with mk2:
+            ui.kpi("Rmax,total (kgf/ต้น)", f"{R_max_kgf:,.0f}")
+        with mk3:
+            ui.kpi("Ru,max (kgf/ต้น)", f"{Ru_max_N * _kf:,.0f}")
+        with mk4:
+            ui.kpi("กำลังปลอดภัยเข็ม (kgf/ต้น)", f"{pile_cap_kgf:,.0f}")
+
+        _sb = st.columns(5)
+        for _c, (_lab, _ok) in zip(_sb, [
+                ("แรงเข็ม / แรงถอน / ผัง",
+                 reaction_ok and uplift_ok and ecc_resolvable_ok),
+                ("เฉือนทะลุ", punch_ok and pile_punch_ok),
+                ("เฉือนคาน", beam_long_ok and beam_short_ok),
+                ("การดัด", flex_long_ok and flex_short_ok),
+                ("เหล็ก / ระยะเรียง", asmin_long_ok and asmin_short_ok
+                 and sp_long_ok and sp_short_ok)]):
+            with _c:
+                st.caption(_lab)
+                ui.status_badge(bool(_ok))
+
+    # ==================================================================
+    # DETAILED CALCULATION  (existing step-by-step tables, collapsed)
+    # ==================================================================
+    st.markdown("#### DETAILED CALCULATION — ขั้นตอนการคำนวณ")
     ecc_rows = ""
     if ex_mm or ey_mm:
         ecc_rows = (
@@ -1071,8 +1155,10 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
             f"{Muy_kgfm:,.0f} kgf-m |\n"
             f"| โมเมนต์เยื้องศูนย์ Mux = Pu,net·(ey/100) | "
             f"{Mux_kgfm:,.0f} kgf-m |\n")
-    st.markdown(
-        f"""
+    with st.expander("รายละเอียดการคำนวณทีละขั้น (Detailed calculation)",
+                     expanded=False):
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | จำนวนเสาเข็ม | {n_piles} ต้น |
@@ -1089,11 +1175,11 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
 | ขนาดฐานราก (กว้าง × ยาว) | {cap_W / CM:,.0f} × {cap_L / CM:,.0f} cm |
 | ความลึกประสิทธิผล ด้านยาว d_long / ด้านสั้น d_short | **{d_long / CM:,.2f} / {d_short / CM:,.2f} cm** |
 """
-    )
+        )
 
-    st.markdown("**แรงเฉือนทะลุ (สองทาง)** — รอบเสา ที่ระยะ d/2 (ใช้ d_avg)")
-    st.markdown(
-        f"""
+        st.markdown("**แรงเฉือนทะลุ (สองทาง)** — รอบเสา ที่ระยะ d/2 (ใช้ d_avg)")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | เส้นรอบรูปวิกฤต b₀ = 4(c + d_avg) | {bo:,.0f} mm |
@@ -1104,11 +1190,11 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
 | b₀,เข็ม ({pile_shape_th}) = {pile_perim_txt} | {bo_pile:,.0f} mm |
 | φVc (หัวเข็ม) = 0.75·0.33·√f'c·b₀,เข็ม·d_avg | **{phiVc_pile / 1000.0 * KN_TO_KGF:,.0f} kgf** |
 """
-    )
+        )
 
-    st.markdown("**แรงเฉือนคาน (ทางเดียว)** — ที่ระยะ d จากผิวเสา แยกสองทิศทาง")
-    st.markdown(
-        f"""
+        st.markdown("**แรงเฉือนคาน (ทางเดียว)** — ที่ระยะ d จากผิวเสา แยกสองทิศทาง")
+        st.markdown(
+            f"""
 | รายการ | ด้านยาว (Long) | ด้านสั้น (Short) |
 |---|---|---|
 | เสาเข็มเลยหน้าตัด | {n_bl} ต้น | {n_bs} ต้น |
@@ -1116,11 +1202,11 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
 | φVc = 0.75·0.17·√f'c·bw·d | {phiVc_long / 1000.0 * KN_TO_KGF:,.0f} kgf | {phiVc_short / 1000.0 * KN_TO_KGF:,.0f} kgf |
 | สถานะ | {_s0(beam_long_ok)} | {_s0(beam_short_ok)} |
 """
-    )
+        )
 
-    st.markdown("**การดัด** — โมเมนต์ที่ผิวเสา แยกสองทิศทาง (Σ Ru,i · แขน)")
-    st.markdown(
-        f"""
+        st.markdown("**การดัด** — โมเมนต์ที่ผิวเสา แยกสองทิศทาง (Σ Ru,i · แขน)")
+        st.markdown(
+            f"""
 | รายการ | ด้านยาว (Long) | ด้านสั้น (Short) |
 |---|---|---|
 | Mu = Σ Ru,i·(ระยะจากผิวเสา) | {Mu_long / 1.0e6 * KN_TO_KGF:,.0f} kgf-m | {Mu_short / 1.0e6 * KN_TO_KGF:,.0f} kgf-m |
@@ -1132,43 +1218,62 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
 | As ที่จัดให้ = จำนวน × พื้นที่เส้น | **{As_prov_long / 100.0:,.2f} cm²** | **{As_prov_short / 100.0:,.2f} cm²** |
 | ระยะเรียงสูงสุด s_max = min(3h, 450 mm) = {s_max / CM:,.1f} cm | {_s0(sp_long_ok)} | {_s0(sp_short_ok)} |
 """
-    )
+        )
     if not feasible:
         st.error("หน้าตัดบางเกินไปสำหรับการดัด (1 − 2Rn/0.85f'c < 0) — "
                  "เพิ่ม h หรือ f'c")
 
-    # ------------------------------------------------------------------
-    # Checks summary
-    # ------------------------------------------------------------------
-    st.subheader("การตรวจสอบการออกแบบ")
-
-    def _s(ok):
-        return "✅ ผ่าน" if ok else "❌ ไม่ผ่าน"
-
+    # ==================================================================
+    # DESIGN CHECKS  (existing demand/capacity rows — rendered here; the
+    # PDF report keeps its own check list unchanged)
+    # ==================================================================
+    st.markdown("#### DESIGN CHECKS — การตรวจสอบการออกแบบ")
     _al = f"{As_req_long / 100.0:,.2f}" if feas_long else "—"
     _as_ = f"{As_req_short / 100.0:,.2f}" if feas_short else "—"
-    st.markdown(
-        f"""
-| การตรวจสอบ | แรงที่กระทำ | กำลังต้านทาน / ขีดจำกัด | สถานะ |
-|---|---|---|---|
-| แรงในเสาเข็มสูงสุด ≤ กำลังปลอดภัย | Rmax,total = {R_max_kgf:,.0f} kgf/ต้น | {pile_cap_kgf:,.0f} kgf/ต้น | {_s(reaction_ok)} |
-| ไม่มีแรงถอน (Rmin ≥ 0) | Rmin,total = {R_min_kgf:,.0f} kgf/ต้น | ≥ 0 | {_s(uplift_ok)} |
-| แรงเฉือนทะลุ (สองทาง) | Vu = {Vup / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_punch / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(punch_ok)} |
-| แรงเฉือนทะลุหัวเข็ม | Ru = {Ru_N / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_pile / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(pile_punch_ok)} |
-| แรงเฉือนคาน — ด้านยาว | Vu = {Vu_long / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_long / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(beam_long_ok)} |
-| แรงเฉือนคาน — ด้านสั้น | Vu = {Vu_short / 1000.0 * KN_TO_KGF:,.0f} kgf | φVc = {phiVc_short / 1000.0 * KN_TO_KGF:,.0f} kgf | {_s(beam_short_ok)} |
-| การดัด — ด้านยาว | As,req = {_al} cm² | As,prov = {As_prov_long / 100.0:,.2f} cm² | {_s(flex_long_ok)} |
-| การดัด — ด้านสั้น | As,req = {_as_} cm² | As,prov = {As_prov_short / 100.0:,.2f} cm² | {_s(flex_short_ok)} |
-| เหล็กขั้นต่ำ — ด้านยาว | As,min = {As_min_long / 100.0:,.2f} cm² | As,prov = {As_prov_long / 100.0:,.2f} cm² | {_s(asmin_long_ok)} |
-| เหล็กขั้นต่ำ — ด้านสั้น | As,min = {As_min_short / 100.0:,.2f} cm² | As,prov = {As_prov_short / 100.0:,.2f} cm² | {_s(asmin_short_ok)} |
-| ระยะเรียง — ด้านยาว | S = {s_long / CM:,.1f} cm | s_max = {s_max / CM:,.1f} cm | {_s(sp_long_ok)} |
-| ระยะเรียง — ด้านสั้น | S = {s_short / CM:,.1f} cm | s_max = {s_max / CM:,.1f} cm | {_s(sp_short_ok)} |
-"""
+    checks = [
+        ("แรงในเสาเข็มสูงสุด ≤ กำลังปลอดภัย",
+         f"Rmax,total = {R_max_kgf:,.0f} kgf/ต้น",
+         f"{pile_cap_kgf:,.0f} kgf/ต้น", reaction_ok),
+        ("ไม่มีแรงถอน (Rmin ≥ 0)", f"Rmin,total = {R_min_kgf:,.0f} kgf/ต้น",
+         "≥ 0", uplift_ok),
+        ("แรงเฉือนทะลุ (สองทาง)",
+         f"Vu = {Vup / 1000.0 * KN_TO_KGF:,.0f} kgf",
+         f"φVc = {phiVc_punch / 1000.0 * KN_TO_KGF:,.0f} kgf", punch_ok),
+        ("แรงเฉือนทะลุหัวเข็ม",
+         f"Ru = {Ru_N / 1000.0 * KN_TO_KGF:,.0f} kgf",
+         f"φVc = {phiVc_pile / 1000.0 * KN_TO_KGF:,.0f} kgf", pile_punch_ok),
+        ("แรงเฉือนคาน — ด้านยาว",
+         f"Vu = {Vu_long / 1000.0 * KN_TO_KGF:,.0f} kgf",
+         f"φVc = {phiVc_long / 1000.0 * KN_TO_KGF:,.0f} kgf", beam_long_ok),
+        ("แรงเฉือนคาน — ด้านสั้น",
+         f"Vu = {Vu_short / 1000.0 * KN_TO_KGF:,.0f} kgf",
+         f"φVc = {phiVc_short / 1000.0 * KN_TO_KGF:,.0f} kgf", beam_short_ok),
+        ("การดัด — ด้านยาว", f"As,req = {_al} cm²",
+         f"As,prov = {As_prov_long / 100.0:,.2f} cm²", flex_long_ok),
+        ("การดัด — ด้านสั้น", f"As,req = {_as_} cm²",
+         f"As,prov = {As_prov_short / 100.0:,.2f} cm²", flex_short_ok),
+        ("เหล็กขั้นต่ำ — ด้านยาว",
+         f"As,min = {As_min_long / 100.0:,.2f} cm²",
+         f"As,prov = {As_prov_long / 100.0:,.2f} cm²", asmin_long_ok),
+        ("เหล็กขั้นต่ำ — ด้านสั้น",
+         f"As,min = {As_min_short / 100.0:,.2f} cm²",
+         f"As,prov = {As_prov_short / 100.0:,.2f} cm²", asmin_short_ok),
+        ("ระยะเรียง — ด้านยาว", f"S = {s_long / CM:,.1f} cm",
+         f"s_max = {s_max / CM:,.1f} cm", sp_long_ok),
+        ("ระยะเรียง — ด้านสั้น", f"S = {s_short / CM:,.1f} cm",
+         f"s_max = {s_max / CM:,.1f} cm", sp_short_ok),
+    ]
+    ui.engineering_table(
+        ["รายการตรวจสอบ", "Demand", "Capacity", "สถานะ"],
+        [[name, dem, cap, "ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"]
+         for name, dem, cap, ok in checks],
+        right_from=1,
     )
 
-    # ------------------------------------------------------------------
-    # Visual detailing — plan view
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # DRAWING / DETAIL  — plan view
+    # ==================================================================
+    st.markdown("#### DRAWING / DETAIL — รายละเอียดหน้าตัด")
     # drawing grid counts: vertical lines = Y-running bars (across W) -> n_y;
     # horizontal lines = X-running bars (across L) -> n_x
     qv, qh = n_y, n_x
@@ -1186,19 +1291,21 @@ def _render_pile_cap(n_piles, kp, is_eccentric=False):
     except Exception as exc:  # pragma: no cover - drawing must never break the page
         st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
 
-    # ------------------------------------------------------------------
-    # Verdict
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
+    # ==================================================================
+    # VERDICT  (existing logic, existing text)
+    # ==================================================================
+    st.markdown("#### VERDICT — ผลการตรวจสอบ")
     if passed:
         st.success(f"{PASS_TXT} — ผ่านทุกการตรวจสอบสำหรับฐานเสาเข็ม {n_piles} ต้น")
     else:
         st.error(f"{FAIL_TXT} — มีรายการที่ไม่ผ่าน โปรดตรวจสอบตารางด้านบน")
     st.caption("หมายเหตุ: โมดูลฐานเสาเข็มเป็นการคำนวณเบื้องต้นตาม ACI 318M-08")
 
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # OUTPUT / REPORT  (report engine unchanged)
+    # ==================================================================
+    st.markdown("#### OUTPUT / REPORT — รายงานการคำนวณ")
     _tag = f"F{n_piles}E" if is_eccentric else f"F{n_piles}"
-    _kf = 1.0 / 1000.0 * KN_TO_KGF                    # N -> kgf
     render_report_expander(
         key=f"{kp}_gen", filename=f"pile_cap_{_tag}_report.pdf",
         title="การออกแบบฐานรากเสาเข็มคอนกรีตเสริมเหล็ก (ACI 318M-08)",

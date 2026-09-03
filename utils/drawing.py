@@ -734,15 +734,36 @@ def _bubble_letter(i):
     return s
 
 
-def draw_grid_plan(x_coords, y_coords, *, marker="square",
-                   active_columns=None, void_panels=None, column_loads=None):
-    """Structural grid plan view.
+def plan_svg_bytes(fig):
+    """Serialise a Matplotlib figure to SVG (vector) ``bytes``.
 
-    Dashed vertical/horizontal grid lines, a column marker (square or
-    circle) at every *active* intersection, lettered grid bubbles along the
-    top and numbered bubbles down the left, dimension chains for the
-    spacings, translucent slab panels and a diagonal-cross symbol for every
-    void panel.  Equal aspect ratio.  Returns a Matplotlib ``Figure``.
+    Text is converted to paths (``svg.fonttype='path'``) so the file
+    renders identically without the Thai font installed, and stays crisp
+    at any zoom.  Presentation only — no geometry is recomputed.
+    """
+    buf = io.BytesIO()
+    _prev = plt.rcParams.get("svg.fonttype", "path")
+    try:
+        plt.rcParams["svg.fonttype"] = "path"
+        fig.savefig(buf, format="svg", bbox_inches="tight")
+    finally:
+        plt.rcParams["svg.fonttype"] = _prev
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def draw_grid_plan(x_coords, y_coords, *, marker="square",
+                   active_columns=None, void_panels=None, column_loads=None,
+                   column_size=None, level_label=None, beam_polys=None,
+                   extra_beam_polys=None):
+    """Structural grid plan view — true-scale, CAD-like technical drawing.
+
+    Thin dashed grid lines, lettered grid bubbles along the top and
+    numbered bubbles down the left, dimension chains for the spacings,
+    faint slab panels and a diagonal-cross symbol for every void panel.
+    **Equal X/Y scale** (``set_aspect('equal')``).  Returns a Matplotlib
+    ``Figure`` (rendered at a high DPI so lines stay crisp when zoomed;
+    also exportable to SVG via :func:`plan_svg_bytes`).
 
     ``active_columns`` — iterable of ``(x, y)`` coords to draw a column at
     (``None`` = every intersection).
@@ -752,15 +773,36 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
     label) to a factored axial load in kgf (or a dict carrying
     ``"Pu_kgf"``).  When given, each active column is annotated with its
     load in tonnes, e.g. ``"12.5 t"``.
+    ``column_size`` — optional ``{"width_m", "length_m"}``.  When given,
+    every column is drawn as a **true-scale rectangle** (width -> X,
+    length -> Y) centred on its grid coordinate, in MODEL units — not a
+    fixed glyph.  ``None`` keeps the legacy scale-relative marker.
+    ``beam_polys`` — optional iterable of ``[(x, y), ...]`` polygons (model
+    coordinates, metres) drawn as true-scale beam rectangles *below* the
+    columns.  The beam width is real geometry, never a renderer
+    line-width.
+    ``extra_beam_polys`` — optional iterable of the same shape for
+    ADDITIONAL (non-grid) beams, drawn in the same technical style with a
+    dashed outline so they are distinguishable from the automatic beams.
+    ``level_label`` — optional storey name shown in the title.
     """
     xs = [float(v) for v in x_coords] or [0.0]
     ys = [float(v) for v in y_coords] or [0.0]
     x0, x1 = xs[0], xs[-1]
     y0, y1 = ys[0], ys[-1]
     span = max(x1 - x0, y1 - y0, 1.0)
-    ext = 0.11 * span
+    ext = 0.085 * span
     circ = str(marker).lower().startswith("c")
     _COL = "#1f5fd0"
+    _cw = _cl = None
+    if column_size:
+        try:
+            _cw = float(column_size.get("width_m"))
+            _cl = float(column_size.get("length_m"))
+            if not (_cw > 0.0 and _cl > 0.0):
+                _cw = _cl = None
+        except (TypeError, ValueError, AttributeError):
+            _cw = _cl = None
 
     if active_columns is None:
         active = {(round(gx, 3), round(gy, 3)) for gy in ys for gx in xs}
@@ -780,33 +822,55 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
                 return v.get("Pu_kgf") if isinstance(v, dict) else float(v)
         return None
 
-    fig, ax = plt.subplots(figsize=(8.4, 8.4))
+    fig, ax = plt.subplots(figsize=(6.6, 6.6), dpi=200)
 
-    # ---- slab panels (fill) / voids (diagonal cross) ------------------
+    # ---- slab panels (very faint fill) / voids (diagonal cross) ------
     for i in range(len(xs) - 1):
         for j in range(len(ys) - 1):
             px0, px1, py0, py1 = xs[i], xs[i + 1], ys[j], ys[j + 1]
             if (i, j) in voids:
                 ax.add_patch(patches.Rectangle(
                     (px0, py0), px1 - px0, py1 - py0, facecolor="none",
-                    edgecolor="#9aa0a6", linewidth=1.0, zorder=1))
+                    edgecolor="#9aa0a6", linewidth=0.8, zorder=1))
                 ax.plot([px0, px1], [py0, py1], color="#9aa0a6",
-                        linewidth=1.0, zorder=1)
+                        linewidth=0.8, zorder=1)
                 ax.plot([px0, px1], [py1, py0], color="#9aa0a6",
-                        linewidth=1.0, zorder=1)
+                        linewidth=0.8, zorder=1)
             else:
                 ax.add_patch(patches.Rectangle(
                     (px0, py0), px1 - px0, py1 - py0, facecolor="#8fb3d9",
-                    edgecolor="none", alpha=0.20, zorder=1))
+                    edgecolor="none", alpha=0.10, zorder=1))
 
+    # ---- grid lines — thin CAD linework -----------------------------
     for gx in xs:
         ax.plot([gx, gx], [y0 - 0.05 * span, y1 + ext],
-                color="#7c7c7c", linewidth=0.9, linestyle=(0, (6, 4)),
-                zorder=2)
+                color="#8a8f94", linewidth=0.6, linestyle=(0, (6, 4)),
+                solid_capstyle="butt", zorder=2)
     for gy in ys:
         ax.plot([x0 - ext, x1 + 0.05 * span], [gy, gy],
-                color="#7c7c7c", linewidth=0.9, linestyle=(0, (6, 4)),
-                zorder=2)
+                color="#8a8f94", linewidth=0.6, linestyle=(0, (6, 4)),
+                solid_capstyle="butt", zorder=2)
+
+    # ---- building outline — heavier than the grid ------------------
+    ax.add_patch(patches.Rectangle(
+        (x0, y0), x1 - x0, y1 - y0, facecolor="none", edgecolor="#37474f",
+        linewidth=1.6, joinstyle="miter", zorder=3))
+
+    # ---- beams — true-scale polygons, drawn UNDER the columns ------
+    for _poly in (beam_polys or []):
+        pts = [(float(px), float(py)) for px, py in _poly]
+        if len(pts) >= 3:
+            ax.add_patch(patches.Polygon(
+                pts, closed=True, facecolor="#eceff1", edgecolor="#455a64",
+                linewidth=1.1, joinstyle="miter", zorder=4))
+    # ---- additional (non-grid) beams — same style, dashed outline ---
+    for _poly in (extra_beam_polys or []):
+        pts = [(float(px), float(py)) for px, py in _poly]
+        if len(pts) >= 3:
+            ax.add_patch(patches.Polygon(
+                pts, closed=True, facecolor="#e3eaf1", edgecolor="#37474f",
+                linewidth=1.2, linestyle=(0, (5, 2)), joinstyle="miter",
+                zorder=4))
 
     r = max(0.032 * span, 0.05)
     off = max(0.045 * span, 0.2)
@@ -814,7 +878,18 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
         for gx in xs:
             if (round(gx, 3), round(gy, 3)) not in active:
                 continue
-            if circ:
+            if _cw is not None:
+                # true-scale column: width -> X, length -> Y, MODEL units
+                if circ:
+                    ax.add_patch(patches.Ellipse(
+                        (gx, gy), _cw, _cl, facecolor="#dbe6f5",
+                        edgecolor=_COL, linewidth=1.4, zorder=5))
+                else:
+                    ax.add_patch(patches.Rectangle(
+                        (gx - _cw / 2.0, gy - _cl / 2.0), _cw, _cl,
+                        facecolor="#dbe6f5", edgecolor=_COL, linewidth=1.4,
+                        joinstyle="miter", zorder=5))
+            elif circ:
                 ax.add_patch(patches.Circle((gx, gy), r, facecolor=_COL,
                                             edgecolor=_CONC_EDGE,
                                             linewidth=1.0, zorder=5))
@@ -830,35 +905,40 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
                         bbox=dict(boxstyle="round,pad=0.15", fc="white",
                                   ec="none", alpha=0.75))
 
-    br = 0.055 * span
+    # ---- grid bubbles — small technical-drawing tags --------------
+    br = max(0.024 * span, 0.09)
+    _bub_fs = max(_NOTE_FS - 3.5, 6.5)
     for i, gx in enumerate(xs):
         ax.add_patch(patches.Circle((gx, y1 + ext), br, facecolor="white",
-                                    edgecolor=_CONC_EDGE, linewidth=1.3,
+                                    edgecolor="#5f6368", linewidth=0.7,
                                     zorder=6))
         ax.text(gx, y1 + ext, _bubble_letter(i), ha="center", va="center",
-                fontsize=_NOTE_FS, fontweight="bold", zorder=7)
+                fontsize=_bub_fs, fontweight="semibold", zorder=7)
     for j, gy in enumerate(ys):
         ax.add_patch(patches.Circle((x0 - ext, gy), br, facecolor="white",
-                                    edgecolor=_CONC_EDGE, linewidth=1.3,
+                                    edgecolor="#5f6368", linewidth=0.7,
                                     zorder=6))
         ax.text(x0 - ext, gy, str(j + 1), ha="center", va="center",
-                fontsize=_NOTE_FS, fontweight="bold", zorder=7)
+                fontsize=_bub_fs, fontweight="semibold", zorder=7)
 
     for a, b in zip(xs[:-1], xs[1:]):
-        _hdim(ax, a, b, y0 - 0.15 * span, y0, f"{b - a:.2f}",
+        _hdim(ax, a, b, y0 - 0.12 * span, y0, f"{b - a:.2f}",
               fs=_DIM_FS - 1.5)
     for a, b in zip(ys[:-1], ys[1:]):
-        _vdim(ax, a, b, x0 - 0.22 * span, x0, f"{b - a:.2f}", left=True,
+        _vdim(ax, a, b, x0 - 0.17 * span, x0, f"{b - a:.2f}", left=True,
               fs=_DIM_FS - 1.5)
 
-    pad = 0.32 * span
+    pad = 0.22 * span
     ax.set_xlim(x0 - pad, x1 + pad)
     ax.set_ylim(y0 - pad, y1 + pad)
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
-    ax.set_title("Structural Grid Plan — Column Load Map" if loads
-                 else "Structural Grid Plan", fontsize=_TITLE_FS)
-    fig.tight_layout(pad=0.8)
+    _base_title = ("Structural Grid Plan — Column Load Map" if loads
+                   else "Structural Grid Plan")
+    if level_label:
+        _base_title = f"2D Floor Plan · {level_label} — {_base_title}"
+    ax.set_title(_base_title, fontsize=_TITLE_FS)
+    fig.tight_layout(pad=0.4)
     return fig
 
 
@@ -866,14 +946,34 @@ def draw_grid_plan(x_coords, y_coords, *, marker="square",
 # Building modeler — interactive 3D frame (Plotly)
 # ===========================================================================
 def draw_3d_building(active_columns, void_panels, x_coords, y_coords,
-                     floor_height_m):
-    """Interactive 3D view of one storey of the modelled grid.
+                     floor_height_m=None, *, floor_elevations=None,
+                     foundation_elev=None, level_labels=None,
+                     column_size=None, extra_beams=None):
+    """Interactive 3D view of the modelled grid.
 
-    * vertical columns at every active node, ``z = 0 .. floor_height_m``
-    * a horizontal grid of floor-framing beams at ``z = floor_height_m``
-      (only along grid lines that bound a solid slab panel)
-    * translucent slab panels at ``z = floor_height_m`` for every solid
-      (non-void) panel
+    Multi-storey when ``floor_elevations`` (top-of-storey levels in metres,
+    ascending from ground = 0) is supplied:
+
+    * vertical columns at every active node from ``z = 0`` to the top level
+    * a horizontal grid of floor-framing beams AND a translucent slab at
+      **every** level in ``floor_elevations`` (only where a solid panel is)
+    * a light dotted rectangle outlining each level for visual separation
+    * an optional text label per level (``level_labels`` maps to
+      ``[0.0] + floor_elevations``)
+    * a dashed datum rectangle at ``foundation_elev`` when given and != 0
+
+    ``column_size`` — optional ``{"width_m", "length_m"}``.  When given,
+    each column is drawn as a rectangular-prism wireframe of that size
+    (width -> X, length -> Y) instead of a single centre line.
+
+    ``extra_beams`` — optional iterable of ``(x1, y1, x2, y2, z)`` tuples
+    (model metres, ``z`` already resolved to the storey elevation) for
+    ADDITIONAL non-grid beams; drawn as dashed lines in the framing
+    colour.
+
+    Backward compatible: when ``floor_elevations`` is omitted the previous
+    single-storey behaviour at ``z = floor_height_m`` is used; when
+    ``column_size`` is omitted columns stay single centre lines.
 
     Plotly is imported lazily so the rest of this module keeps working when
     the package is absent; the caller may catch ``ImportError``.
@@ -883,27 +983,60 @@ def draw_3d_building(active_columns, void_panels, x_coords, y_coords,
 
     xs = [float(v) for v in x_coords] or [0.0]
     ys = [float(v) for v in y_coords] or [0.0]
-    H = float(floor_height_m)
+    if floor_elevations:
+        elevs = sorted({float(e) for e in floor_elevations if float(e) > 0.0})
+    elif floor_height_m is not None:
+        elevs = [float(floor_height_m)]
+    else:
+        elevs = [3.0]
+    if not elevs:
+        elevs = [3.0]
+    top = elevs[-1]
     voids = {(int(i), int(j)) for i, j in (void_panels or [])}
     active = [(round(float(px), 3), round(float(py), 3))
               for px, py in (active_columns or [])]
 
     _COL3D, _BEAM3D, _SLAB3D = "#1f5fd0", "#37474f", "#8fb3d9"
+    _SEP3D, _FND3D = "#9aa4ae", "#8d6e63"
     fig = go.Figure()
 
-    # ---- columns --------------------------------------------------------
+    x0, x1 = xs[0], xs[-1]
+    y0, y1 = ys[0], ys[-1]
+
+    _cw = _cl = None
+    if column_size:
+        try:
+            _cw = float(column_size.get("width_m"))
+            _cl = float(column_size.get("length_m"))
+            if not (_cw > 0.0 and _cl > 0.0):
+                _cw = _cl = None
+        except (TypeError, ValueError, AttributeError):
+            _cw = _cl = None
+
+    # ---- columns  (z = 0 .. top level) --------------------------------
     cx, cy, cz = [], [], []
     for px, py in active:
-        cx += [px, px, None]
-        cy += [py, py, None]
-        cz += [0.0, H, None]
+        if _cw is not None:
+            hx, hy = _cw / 2.0, _cl / 2.0
+            for sx, sy in ((-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)):
+                cx += [px + sx, px + sx, None]
+                cy += [py + sy, py + sy, None]
+                cz += [0.0, top, None]
+            for zc in (0.0, top):
+                cx += [px - hx, px + hx, px + hx, px - hx, px - hx, None]
+                cy += [py - hy, py - hy, py + hy, py + hy, py - hy, None]
+                cz += [zc, zc, zc, zc, zc, None]
+        else:
+            cx += [px, px, None]
+            cy += [py, py, None]
+            cz += [0.0, top, None]
     if cx:
         fig.add_trace(go.Scatter3d(
             x=cx, y=cy, z=cz, mode="lines",
-            line=dict(color=_COL3D, width=8),
+            line=dict(color=_COL3D, width=(3 if _cw is not None else 8)),
             name="เสา (Columns)", hoverinfo="skip"))
 
-    # ---- floor-framing beams at z = H --------------------------------
+    # ---- solid-panel edges (shared for every level) -----------------
     h_edges, v_edges = set(), set()
     for i in range(len(xs) - 1):
         for j in range(len(ys) - 1):
@@ -913,53 +1046,112 @@ def draw_3d_building(active_columns, void_panels, x_coords, y_coords,
             h_edges.add((i, j + 1))
             v_edges.add((i, j))
             v_edges.add((i + 1, j))
+
+    # ---- floor-framing beams + translucent slabs at EVERY level ----
     bx, by, bz = [], [], []
-    for i, j in h_edges:
-        bx += [xs[i], xs[i + 1], None]
-        by += [ys[j], ys[j], None]
-        bz += [H, H, None]
-    for i, j in v_edges:
-        bx += [xs[i], xs[i], None]
-        by += [ys[j], ys[j + 1], None]
-        bz += [H, H, None]
+    mx, my, mz, mi, mj, mk = [], [], [], [], [], []
+    base = 0
+    for H in elevs:
+        for i, j in h_edges:
+            bx += [xs[i], xs[i + 1], None]
+            by += [ys[j], ys[j], None]
+            bz += [H, H, None]
+        for i, j in v_edges:
+            bx += [xs[i], xs[i], None]
+            by += [ys[j], ys[j + 1], None]
+            bz += [H, H, None]
+        for i in range(len(xs) - 1):
+            for j in range(len(ys) - 1):
+                if (i, j) in voids:
+                    continue
+                mx += [xs[i], xs[i + 1], xs[i + 1], xs[i]]
+                my += [ys[j], ys[j], ys[j + 1], ys[j + 1]]
+                mz += [H, H, H, H]
+                mi += [base, base]
+                mj += [base + 1, base + 2]
+                mk += [base + 2, base + 3]
+                base += 4
     if bx:
         fig.add_trace(go.Scatter3d(
             x=bx, y=by, z=bz, mode="lines",
             line=dict(color=_BEAM3D, width=4),
             name="คาน / พื้น (Framing)", hoverinfo="skip"))
 
-    # ---- translucent slab panels at z = H --------------------------
-    mx, my, mz, mi, mj, mk = [], [], [], [], [], []
-    base = 0
-    for i in range(len(xs) - 1):
-        for j in range(len(ys) - 1):
-            if (i, j) in voids:
-                continue
-            mx += [xs[i], xs[i + 1], xs[i + 1], xs[i]]
-            my += [ys[j], ys[j], ys[j + 1], ys[j + 1]]
-            mz += [H, H, H, H]
-            mi += [base, base]
-            mj += [base + 1, base + 2]
-            mk += [base + 2, base + 3]
-            base += 4
+    # ---- additional (non-grid) beams — dashed, at their storey z ----
+    ax_, ay_, az_ = [], [], []
+    for _seg in (extra_beams or []):
+        try:
+            _x1, _y1, _x2, _y2, _z = (float(v) for v in _seg)
+        except (TypeError, ValueError):
+            continue
+        ax_ += [_x1, _x2, None]
+        ay_ += [_y1, _y2, None]
+        az_ += [_z, _z, None]
+    if ax_:
+        fig.add_trace(go.Scatter3d(
+            x=ax_, y=ay_, z=az_, mode="lines",
+            line=dict(color=_BEAM3D, width=5, dash="dash"),
+            name="คานเพิ่มเติม (Additional)", hoverinfo="skip"))
     if mx:
         fig.add_trace(go.Mesh3d(
             x=mx, y=my, z=mz, i=mi, j=mj, k=mk,
             color=_SLAB3D, opacity=0.35, flatshading=True,
             name="แผ่นพื้น (Slab)", hoverinfo="skip", showscale=False))
 
+    # ---- per-level separation outline ------------------------------
+    sx, sy, sz = [], [], []
+    for H in elevs:
+        sx += [x0, x1, x1, x0, x0, None]
+        sy += [y0, y0, y1, y1, y0, None]
+        sz += [H, H, H, H, H, None]
+    if sx:
+        fig.add_trace(go.Scatter3d(
+            x=sx, y=sy, z=sz, mode="lines",
+            line=dict(color=_SEP3D, width=2, dash="dot"),
+            name="ระดับชั้น (Levels)", hoverinfo="skip"))
+
+    # ---- foundation datum ----------------------------------------
+    if foundation_elev is not None and float(foundation_elev) != 0.0:
+        fe = float(foundation_elev)
+        fig.add_trace(go.Scatter3d(
+            x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0],
+            z=[fe, fe, fe, fe, fe], mode="lines",
+            line=dict(color=_FND3D, width=3, dash="dash"),
+            name="ฐานราก (Foundation ref)", hoverinfo="skip"))
+
+    # ---- level text labels -------------------------------------
+    if level_labels:
+        _lz = [0.0] + list(elevs)
+        lx, ly, lz, lt = [], [], [], []
+        for _z, _lab in zip(_lz, level_labels):
+            lx.append(x0)
+            ly.append(y0)
+            lz.append(_z)
+            lt.append(str(_lab))
+        if lt:
+            fig.add_trace(go.Scatter3d(
+                x=lx, y=ly, z=lz, mode="text", text=lt,
+                textposition="top left",
+                textfont=dict(color="#37474f", size=11),
+                name="ป้ายระดับ (Labels)", hoverinfo="skip",
+                showlegend=False))
+
     # ---- layout — equal X/Y scale, soft grid backgrounds ----------
+    H = top
     span_x = (xs[-1] - xs[0]) or 1.0
     span_y = (ys[-1] - ys[0]) or 1.0
     _axis = dict(backgroundcolor="#f4f6f8", showbackground=True,
                  gridcolor="#d9dee3", zerolinecolor="#c2c9d1")
     fig.update_layout(
-        title="Building 3D Frame",
+        title=dict(text="Building 3D Frame", font=dict(color="#e6edf3")),
+        paper_bgcolor="rgba(0,0,0,0)",
         height=560,
         margin=dict(l=0, r=0, t=36, b=0),
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=0.0,
-                    xanchor="center", x=0.5),
+                    xanchor="center", x=0.5,
+                    font=dict(color="#e6edf3"),
+                    bgcolor="rgba(0,0,0,0)"),
         scene=dict(
             xaxis=dict(title="X (m)", **_axis),
             yaxis=dict(title="Y (m)", **_axis),

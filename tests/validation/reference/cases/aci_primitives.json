@@ -1,0 +1,415 @@
+[
+  {
+    "case_id": "EV-ACI-001",
+    "module": "utils/aci_318m.py :: beta1 / get_beta1",
+    "category": "ACI primitive",
+    "description": "Equivalent stress-block factor beta1 across the ACI 10.2.7.3 piecewise definition.",
+    "inputs": {
+      "fc_MPa": [
+        21.0,
+        28.0,
+        35.0,
+        42.0,
+        56.0
+      ]
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2.7.3",
+      "equation": "beta1 = 0.85 (fc<=28); 0.85-0.05(fc-28)/7 (>=0.65)"
+    },
+    "expected": {
+      "beta1": {
+        "fc_21_MPa": 0.85,
+        "fc_28_MPa": 0.85,
+        "fc_35_MPa": 0.7999999999999999,
+        "fc_42_MPa": 0.75,
+        "fc_56_MPa": 0.65
+      }
+    },
+    "intermediate": {
+      "note": "35 MPa: 0.85-0.05*(7)/7 = 0.80 ; 42 MPa: 0.85-0.05*(14)/7 = 0.75 ; 56 MPa: floor 0.65"
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "rationale": "closed-form piecewise linear; exact"
+    },
+    "notes": "Pair with EV-ACI-001M for the MKS-form discrepancy (VF-07).",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-001M",
+    "module": "modules/beam.py :: _beta1_ksc ; modules/column.py :: _beta1_col_ksc",
+    "category": "ACI primitive / engineering assumption (VF-07)",
+    "description": "MKS beta1 helpers break at a literal 280 ksc and -0.05 per 70 ksc; the single ACI 10.2.7.3 definition breaks at 28 MPa (= 285.53 ksc). Quantify the resulting beta1 gap.",
+    "inputs": {
+      "fc_ksc": [
+        240.0,
+        280.0,
+        300.0,
+        350.0,
+        420.0
+      ]
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.2.7.3",
+      "equation": "one definition in MPa; MKS transcription should convert first"
+    },
+    "expected": {
+      "beta1_engine_MKS_form": {
+        "fc_240_ksc": 0.85,
+        "fc_280_ksc": 0.85,
+        "fc_300_ksc": 0.8357142857142857,
+        "fc_350_ksc": 0.7999999999999999,
+        "fc_420_ksc": 0.75
+      },
+      "beta1_code_consistent": {
+        "fc_240_ksc": 0.85,
+        "fc_280_ksc": 0.85,
+        "fc_300_ksc": 0.8398574999999999,
+        "fc_350_ksc": 0.80483375,
+        "fc_420_ksc": 0.7558005
+      },
+      "beta1_gap_engine_minus_code": {
+        "fc_240_ksc": 0.0,
+        "fc_280_ksc": 0.0,
+        "fc_300_ksc": -0.004143214285714181,
+        "fc_350_ksc": -0.004833750000000081,
+        "fc_420_ksc": -0.005800499999999986
+      }
+    },
+    "intermediate": {
+      "break_point_ksc_equiv_of_28MPa": 285.5205396338199,
+      "max_abs_gap": 0.005800499999999986,
+      "comment": "At/under 280 ksc both give 0.85 (no gap). Above the break the MKS-form beta1 is a few thousandths LOWER than the code-consistent value; effect on phiMn is second order (changes 'a', not the lever arm much)."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "TBD",
+      "rationale": "this case documents a modelling choice, not a pass/fail on a single number; EV-03 decides whether the gap is acceptable for design output."
+    },
+    "notes": "RECORD ONLY. Do not change either helper.",
+    "status": "REVIEW"
+  },
+  {
+    "case_id": "EV-ACI-002",
+    "module": "utils/aci_318m.py :: rho_min_flexure / rho_min_flexure_ksc",
+    "category": "ACI primitive",
+    "description": "Minimum flexural steel ratio, both governing branches, SI (0.25 sqrt/1.4) and MKS (0.8 sqrt/14).",
+    "inputs": {
+      "si_fc_fy_MPa": [
+        [
+          21.0,
+          392.266
+        ],
+        [
+          28.0,
+          392.266
+        ],
+        [
+          35.0,
+          392.266
+        ],
+        [
+          24.0,
+          235.36
+        ]
+      ],
+      "mks_fc_fy_ksc": [
+        [
+          240.0,
+          4000.0
+        ],
+        [
+          280.0,
+          4000.0
+        ],
+        [
+          350.0,
+          4000.0
+        ],
+        [
+          240.0,
+          2400.0
+        ]
+      ]
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.5.1",
+      "equation": "rho_min = max(0.25 sqrt f'c / fy, 1.4/fy) [MPa]"
+    },
+    "expected": {
+      "rho_min_SI": {
+        "fc21_fy392.266": 0.0035690067454227483,
+        "fc28_fy392.266": 0.0035690067454227483,
+        "fc35_fy392.266": 0.0037704515450610147,
+        "fc24_fy235.36": 0.005948334466349421
+      },
+      "rho_min_MKS": {
+        "fc240_fy4000": 0.0035,
+        "fc280_fy4000": 0.0035,
+        "fc350_fy4000": 0.0037416573867739417,
+        "fc240_fy2400": 0.005833333333333334
+      }
+    },
+    "intermediate": {
+      "note": "For fy=392 MPa the 1.4/fy branch (0.003569) governs up to fc ~ 31.4 MPa; above that 0.25 sqrt(fc)/fy governs."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "rationale": "closed form"
+    },
+    "notes": "MKS vs SI forms are numerically ~equivalent but not identical (0.8 vs 0.25/sqrt(0.0980665)=0.7985; 14 vs 1.4/0.0980665=14.28). Small deliberate metric rounding.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-003",
+    "module": "modules/beam.py :: _rho_max_ksc (cf. utils/aci_318m.rho_max_flexure)",
+    "category": "ACI primitive",
+    "description": "Tension-controlled maximum reinforcement ratio, eps_t = 0.005 (c/d = 3/8), MKS.",
+    "inputs": {
+      "fc_fy_ksc": [
+        [
+          240.0,
+          4000.0
+        ],
+        [
+          280.0,
+          4000.0
+        ],
+        [
+          350.0,
+          4000.0
+        ],
+        [
+          240.0,
+          2400.0
+        ]
+      ]
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "10.3.4",
+      "equation": "rho_max = 0.85 beta1 f'c/fy * 0.003/(0.003+0.005)"
+    },
+    "expected": {
+      "rho_max_MKS": {
+        "fc240_fy4000": 0.01625625,
+        "fc280_fy4000": 0.018965625,
+        "fc350_fy4000": 0.022312499999999996,
+        "fc240_fy2400": 0.027093749999999996
+      }
+    },
+    "intermediate": {
+      "factor_eps": 0.375
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "rationale": "closed form"
+    },
+    "notes": "Uses beta1_mks (280 ksc break) to match the engine helper.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-004",
+    "module": "utils/aci_318m.py :: phi_flexure",
+    "category": "ACI primitive",
+    "description": "Strength-reduction factor vs net tensile strain, tied and spiral, incl. both transition endpoints.",
+    "inputs": {
+      "eps_t": [
+        0.001,
+        0.002,
+        0.00275,
+        0.00375,
+        0.005,
+        0.006
+      ],
+      "spiral": [
+        false,
+        true
+      ]
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "9.3.2",
+      "equation": "phi_c at eps_ty; 0.90 at 0.005; linear between (eps_ty = 0.002)"
+    },
+    "expected": {
+      "phi_tied": {
+        "eps_0.001": 0.65,
+        "eps_0.002": 0.65,
+        "eps_0.00275": 0.7125,
+        "eps_0.00375": 0.7958333333333334,
+        "eps_0.005": 0.9,
+        "eps_0.006": 0.9
+      },
+      "phi_spiral": {
+        "eps_0.001": 0.75,
+        "eps_0.002": 0.75,
+        "eps_0.00275": 0.7875,
+        "eps_0.00375": 0.8375,
+        "eps_0.005": 0.9,
+        "eps_0.006": 0.9
+      }
+    },
+    "intermediate": {
+      "eps_ty_literal": 0.002,
+      "note": "Engine uses EPSILON_TY = 0.002 literal, not fy/Es. For fy=420 MPa fy/Es = 0.0021 -> a ~0.4% wider compression-controlled plateau. NOTE only."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "rationale": "closed form piecewise linear"
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-005",
+    "module": "utils/aci_318m.py :: vc_beam / vc_beam_ksc",
+    "category": "ACI primitive",
+    "description": "Concrete one-way (beam) shear strength, SI 0.17 sqrt f'c bw d and MKS 0.53 sqrt f'c b d.",
+    "inputs": {
+      "fc_ksc": 240.0,
+      "b_cm": 30.0,
+      "d_cm": 54.0,
+      "fc_MPa": 23.53596,
+      "bw_mm": 300.0,
+      "d_mm": 540.0,
+      "lambda": 1.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.2.1.1",
+      "equation": "Vc = 0.17 lambda sqrt(f'c) bw d (Eq. 11-3)"
+    },
+    "expected": {
+      "Vc_SI_N": 133607.20983366133,
+      "Vc_MKS_053_kgf": 13301.374004214755,
+      "Vc_MKS_exact_equiv_kgf": 13624.143803812856
+    },
+    "intermediate": {
+      "mks_engine_coeff": 0.53,
+      "mks_exact_coeff": 0.5428609265277999,
+      "coeff_ratio_engine_over_exact": 0.9763089846785256,
+      "comment": "0.53 (engine) vs 0.54286 (exact SI-equivalent): the traditional metric coefficient is ~2.4% LOW, i.e. slightly conservative. Standard ACI-MKS practice; NOTE, not a defect."
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "SI form: numerical rel 1e-9. MKS 0.53 form vs SI-exact: expect ~2.4% gap -- that gap is the REFERENCE prediction, not slack.",
+      "rationale": "two different code transcriptions; the gap is a known modelling choice to be reported."
+    },
+    "notes": "",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-006",
+    "module": "modules/footing.py :: _render_isolated_footing (vc1/vc2/vc3 punching block)",
+    "category": "ACI primitive / code-sensitive",
+    "description": "Two-way (punching) shear stress capacity, three ACI expressions and their governing minimum, square interior column.",
+    "inputs": {
+      "fc_MPa": 23.53596,
+      "cx_mm": 400.0,
+      "cy_mm": 400.0,
+      "d_mm": 470.0,
+      "alpha_s": 40.0,
+      "lambda": 1.0,
+      "beta_c": 1.0
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "11.11.2.1",
+      "equation": "Eqs 11-31 (0.17(1+2/bc)), 11-32 (0.083(as d/bo+2)), 11-33 (0.33); vc = min"
+    },
+    "expected": {
+      "b0_mm": 3480.0,
+      "vc1_MPa": 2.4742075895122464,
+      "vc2_MPa": 2.9806478267885645,
+      "vc3_MPa": 1.600957852037336,
+      "vc_governing_MPa": 1.600957852037336
+    },
+    "intermediate": {
+      "governs": "vc3 (0.33 sqrt f'c) for a square column with a compact critical perimeter -- confirm at runtime"
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "rationale": "closed form"
+    },
+    "notes": "Rectangular b0 = 2(cx+d)+2(cy+d) is the ACI 11.11.1.2 critical section -- correct. See EV-FOOT-002 for the circular-pile perimeter finding (VF-09).",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ACI-007",
+    "module": "modules/column.py :: _render_column (tie-spacing check)",
+    "category": "code-sensitive / discrete",
+    "description": "Maximum permitted tie spacing = min(16 db_long, 48 db_tie, least column dimension).",
+    "inputs": {
+      "combos_cm": [
+        {
+          "db_long_cm": 2.5,
+          "db_tie_cm": 0.9,
+          "least_dim_cm": 40.0
+        },
+        {
+          "db_long_cm": 2.0,
+          "db_tie_cm": 0.9,
+          "least_dim_cm": 25.0
+        },
+        {
+          "db_long_cm": 1.2,
+          "db_tie_cm": 0.6,
+          "least_dim_cm": 30.0
+        }
+      ]
+    },
+    "reference_method": "LEVEL_C",
+    "code_reference": {
+      "code": "ACI 318M-08",
+      "section": "7.10.5.2",
+      "equation": "s_max = min(16 db, 48 d_tie, least dimension)"
+    },
+    "expected": {
+      "per_combo": [
+        {
+          "s_max_cm": 40.0,
+          "governed_by": "16db"
+        },
+        {
+          "s_max_cm": 25.0,
+          "governed_by": "least_dim"
+        },
+        {
+          "s_max_cm": 19.2,
+          "governed_by": "16db"
+        }
+      ]
+    },
+    "intermediate": {
+      "FINDING_VF10": "The engine computes s_max with exactly this formula, then sets spacing_ok = (s_max >= 5 cm) -- a constructability floor. It never receives a PROVIDED tie spacing, so the 'below / at / above the limit' PASS/FAIL boundary requested by the EV-02 brief does not exist in the engine. Validate the s_max FORMULA; record VF-10."
+    },
+    "tolerance": {
+      "type": "discrete",
+      "rationale": "exact min() of exact products; governed-by branch is exact"
+    },
+    "notes": "RECORD ONLY.",
+    "status": "REFERENCE_READY"
+  }
+]

@@ -1,13 +1,19 @@
-"""Streamlit UI — RC rectangular column: biaxial P-M interaction design.
+"""Streamlit UI — RC rectangular / circular column: uniaxial P-M design.
 
 Strain-compatibility method (ACI 318M-08 10.2 / 10.3):
     * sweep the neutral-axis depth c, εcu = 0.003
-    * build the nominal and design (φ) P-M curves for bending about X and Y
+    * build ONE single-axis nominal and design (φ) P-M interaction curve
     * φ (tied) interpolates 0.65 -> 0.90 with the net tensile strain εt
-    * axial cap  Pu,max = 0.80 φ [0.85 f'c (Ag - Ast) + fy Ast]
-    * biaxial check by the Bresler reciprocal-load method
+      (0.75 -> 0.90 for spiral columns)
+    * axial cap  Pu,max = α φ [0.85 f'c (Ag - Ast) + fy Ast]
+      (α = 0.80 tied, 0.85 spiral)
+    * verdict = the demand point (Mu, Pu) lies inside the design P-M curve
 
-UI units: cm / ksc / kN ; converted to mm / MPa / N internally.
+The current implementation is UNIAXIAL only — a single moment demand Mu
+checked against a single-axis interaction curve.  Biaxial X/Y interaction
+and the Bresler reciprocal-load method are NOT implemented.
+
+UI units: cm / ksc / kgf ; converted to mm / MPa / N internally.
 """
 
 import math
@@ -15,6 +21,7 @@ import math
 import numpy as np
 import streamlit as st
 
+from utils import ui
 from utils.aci_318m import get_beta1, rebars, bar_area
 from utils.drawing import (draw_column_pm_and_section, draw_column_detail,
                            draw_pm_diagram, fig_to_png_buf)
@@ -53,6 +60,15 @@ UNDER_CONSTRUCTION = "กำลังอยู่ระหว่างการ�
 
 
 def render_column_module():
+    """Column Design — RC CodePro visual language (same as Beam).
+
+    Full-width flow: the P-M interaction diagram and the cross-section
+    detail need the width, so the Design Summary is a horizontal band near
+    the top rather than a right rail.  All engineering logic is unchanged.
+    """
+    ui.breadcrumb("Member Design", "Column")
+    ui.page_header("Column Design", "Axial + Flexural Design — ACI 318M-08")
+
     column_type = st.selectbox("เลือกประเภทเสา (Column Type)", COLUMN_TYPES,
                                key="column_type")
     if column_type == "Column (เสา)":
@@ -326,10 +342,9 @@ def _point_in_poly(px, py, xs, ys):
 
 
 def _render_column():
-    st.title("การออกแบบเสา (Column — แรงตามแนวแกน + รายละเอียด)")
-    st.caption("ตรวจสอบอัตราส่วนเหล็กเสริม ρg, กำลังรับแรงตามแนวแกน φPn,max และ "
-               "ระยะเรียงเหล็กปลอก/เหล็กเกลียว ตามมาตรฐาน ACI 318M-08 — "
-               "หน่วยเมตริก (cm, kgf, kgf-m, ksc)")
+    st.caption("ตรวจสอบอัตราส่วนเหล็กเสริม ρg, กำลังรับแรงตามแนวแกน φPn,max, "
+               "ปฏิสัมพันธ์ P-M และระยะเรียงเหล็กปลอก/เหล็กเกลียว ตามมาตรฐาน "
+               "ACI 318M-08 — หน่วยเมตริก (cm, kgf, kgf-m, ksc)")
 
     shape = st.selectbox("ประเภทเสา (Column Type)", COL_SHAPES, key="cd_shape")
     circular = shape.startswith("Circular")
@@ -355,41 +370,52 @@ def _render_column():
                 f"Pu = {_gi.get('Pu_kgf', 0):,.0f} kgf"
             )
 
+    st.markdown("#### MEMBER INPUT")
+
     # ------------------------------------------------------------------
-    # 1. Section & Material
+    # 1a. Geometry  (widget keys / defaults unchanged)
     # ------------------------------------------------------------------
-    with st.expander("หน้าตัดและวัสดุ (Section & Material)", expanded=True):
-        s1, s2 = st.columns(2)
+    with ui.section_card("GEOMETRY — เรขาคณิตหน้าตัด"):
         if circular:
-            with s1:
-                D_cm = st.number_input("เส้นผ่านศูนย์กลาง D (cm)", min_value=20.0,
-                                       value=45.0, step=1.0, format="%.1f",
-                                       key="cd_D")
+            gc1, gc2 = st.columns(2)
+            with gc1:
+                D_cm = st.number_input("เส้นผ่านศูนย์กลาง D (cm)",
+                                       min_value=20.0, value=45.0, step=1.0,
+                                       format="%.1f", key="cd_D")
             b_cm = h_cm = float(D_cm)
+            with gc2:
+                cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=2.0,
+                                         value=4.0, step=0.5, format="%.1f",
+                                         key="cd_cov")
         else:
-            with s1:
+            gc1, gc2, gc3 = st.columns(3)
+            with gc1:
                 b_cm = st.number_input("ความกว้าง b (cm)", min_value=20.0,
                                        value=40.0, step=1.0, format="%.1f",
                                        key="cd_b")
-            with s2:
+            with gc2:
                 h_cm = st.number_input("ความลึก h (cm)", min_value=20.0,
                                        value=40.0, step=1.0, format="%.1f",
                                        key="cd_h")
             D_cm = None
+            with gc3:
+                cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=2.0,
+                                         value=4.0, step=0.5, format="%.1f",
+                                         key="cd_cov")
 
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            cov_cm = st.number_input("ระยะหุ้มคอนกรีต (cm)", min_value=2.0,
-                                     value=4.0, step=0.5, format="%.1f",
-                                     key="cd_cov")
-        with m2:
+    # ------------------------------------------------------------------
+    # 1b. Material  (widget keys / defaults unchanged)
+    # ------------------------------------------------------------------
+    with ui.section_card("MATERIAL — วัสดุ"):
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
             fc_ksc = st.number_input("f'c (ksc)", min_value=180, value=240,
                                      step=10, format="%d", key="cd_fc")
-        with m3:
+        with mc2:
             fy_ksc = st.number_input("fy เหล็กหลัก (ksc)", min_value=2400,
                                      value=4000, step=100, format="%d",
                                      key="cd_fy")
-        with m4:
+        with mc3:
             fyv_ksc = st.number_input("fyv ปลอก/เกลียว (ksc)", min_value=2400,
                                       value=2400, step=100, format="%d",
                                       key="cd_fyv")
@@ -397,33 +423,35 @@ def _render_column():
     # ------------------------------------------------------------------
     # 2. Loads
     # ------------------------------------------------------------------
-    with st.expander("แรงกระทำ (Loads)", expanded=True):
-        l1, l2 = st.columns(2)
-        with l1:
+    with ui.section_card("LOADS — แรงกระทำ"):
+        lc1, lc2 = st.columns(2)
+        with lc1:
             _pu_kw = {} if "cd_Pu" in st.session_state else {"value": 180000.0}
             Pu = st.number_input("แรงตามแนวแกนประลัย Pu (kgf)", min_value=0.0,
                                  step=1000.0, key="cd_Pu", **_pu_kw)
-        with l2:
+        with lc2:
             Mu = st.number_input(
                 "โมเมนต์ดัดประลัย Mu (kgf-m)", min_value=0.0, value=6000.0,
                 step=100.0, key="cd_Mu",
-                help="ยังไม่นำมาคิดในรุ่นนี้ — เก็บไว้สำหรับแผนภาพ P-M ในอนาคต")
+                help="โมเมนต์ดัดที่กระทำ — ใช้ตรวจสอบจุด (Mu, Pu) "
+                     "กับเส้นปฏิสัมพันธ์ P-M (แกนเดียว)")
 
     # ------------------------------------------------------------------
     # 3. Reinforcement
     # ------------------------------------------------------------------
-    with st.expander("เหล็กเสริม (Reinforcement)", expanded=True):
-        r1, r2 = st.columns(2)
-        with r1:
+    with ui.section_card("REINFORCEMENT — เหล็กเสริม"):
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1:
             main_size = st.selectbox("เหล็กเสริมหลัก — ขนาด", MAIN_SIZES,
                                      index=MAIN_SIZES.index("DB20"),
                                      key="cd_msz")
+        with rc2:
             n_bars = int(st.number_input(
                 "จำนวนเหล็กเสริมหลักทั้งหมด (เส้น)",
                 min_value=(6 if circular else 4),
                 value=(8 if circular else 8), step=(2 if circular else 1),
                 key="cd_nbar"))
-        with r2:
+        with rc3:
             _tie_word = "เหล็กเกลียว (Spiral)" if circular else "เหล็กปลอก (Tie)"
             stir_size = st.selectbox(f"{_tie_word} — ขนาด", STIRRUP_SIZES,
                                      index=0, key="cd_ssz")
@@ -511,14 +539,97 @@ def _render_column():
 
     passed = ratio_ok and axial_ok and spacing_ok and pm_ok
 
-    # ------------------------------------------------------------------
-    # Calculation breakdown
-    # ------------------------------------------------------------------
-    st.subheader("ขั้นตอนการคำนวณ")
-    _sec_txt = (f"วงกลม Ø {D:,.1f} cm" if circular
-                else f"สี่เหลี่ยม {b:,.1f} × {h:,.1f} cm")
-    st.markdown(
-        f"""
+    # ==================================================================
+    # DESIGN SUMMARY  (reads existing verdict + existing values only)
+    # ==================================================================
+    st.markdown("#### DESIGN SUMMARY")
+    with st.container(border=True):
+        sc_status, sc_util = st.columns([1, 2])
+        with sc_status:
+            st.markdown("**STATUS**")
+            ui.status_badge("pass" if passed else "fail",
+                            "PASS" if passed else "FAIL")
+        with sc_util:
+            st.markdown("**UTILIZATION** (demand / capacity)")
+            ui.utilization("แรงตามแนวแกน  Pu / φPn,max", Pu, phiPn_max)
+            ui.utilization("โมเมนต์  Mu / φMn@Pu", Mu, phiMn_at_Pu)
+
+        k1, k2, k3, k4 = st.columns(4)
+        with k1:
+            ui.kpi("φPn,max (kgf)", f"{phiPn_max:,.0f}")
+        with k2:
+            ui.kpi("φMn @ Pu (kgf-m)", f"{phiMn_at_Pu:,.0f}")
+        with k3:
+            ui.kpi("ρg (%)", f"{rho_g * 100.0:,.2f}")
+        with k4:
+            ui.kpi("S แนะนำ (cm)", f"≤ {S_req:,.1f}")
+
+        b_ratio, b_axial, b_pm, b_tie = st.columns(4)
+        with b_ratio:
+            st.caption("อัตราส่วนเหล็ก ρg")
+            ui.status_badge(bool(ratio_ok))
+        with b_axial:
+            st.caption("แรงตามแนวแกน")
+            ui.status_badge(bool(axial_ok))
+        with b_pm:
+            st.caption("ปฏิสัมพันธ์ P-M")
+            ui.status_badge(bool(pm_ok))
+        with b_tie:
+            st.caption("ระยะเรียงเหล็กขวาง")
+            ui.status_badge(bool(spacing_ok))
+
+    # ==================================================================
+    # DESIGN CHECKS  (existing demand/capacity tuples — one source,
+    # rendered here and passed unchanged to the PDF report)
+    # ==================================================================
+    st.markdown("#### DESIGN CHECKS — ผลการตรวจสอบ")
+    checks = [
+        ("อัตราส่วนเหล็ก ρg (1–8%)", f"{rho_g * 100:,.2f} %",
+         "1.00 – 8.00 %", ratio_ok),
+        ("ปฏิสัมพันธ์ P-M — (Mu, Pu) ในเส้นออกแบบ",
+         f"Mu = {Mu:,.0f} kgf-m", f"φMn ≈ {phiMn_at_Pu:,.0f} kgf-m", pm_ok),
+        ("กำลังตามแนวแกน (φPn,max ≥ Pu)", f"{Pu:,.0f} kgf",
+         f"{phiPn_max:,.0f} kgf", axial_ok),
+        (("ระยะพิตช์เหล็กเกลียว" if circular else "ระยะเรียงเหล็กปลอก"),
+         f"S ≤ {S_req:,.1f} cm",
+         f"{'พิตช์ 2.5–7.5 cm' if circular else f'≤ {least_dim:,.0f} cm'}",
+         spacing_ok),
+    ]
+    ui.engineering_table(
+        ["รายการตรวจสอบ", "Demand", "Capacity", "สถานะ"],
+        [[name, dem, cap, "ผ่าน (PASS)" if ok else "ไม่ผ่าน (FAIL)"]
+         for name, dem, cap, ok in checks],
+        right_from=1,
+    )
+    if not ratio_ok:
+        side = "ต่ำกว่า 1%" if rho_g < RHO_MIN else "เกิน 8%"
+        st.warning(f"ρg {side} — ปรับจำนวน/ขนาดเหล็ก หรือขนาดหน้าตัด")
+    if circular and not spacing_ok:
+        st.warning("พิตช์ที่ต้องใช้ < 2.5 cm — เพิ่มขนาดเหล็กเกลียว")
+
+    # ---- overall verdict (existing logic, existing text) -------------
+    if passed:
+        st.success(f"{PASS_TXT} — ρg, ปฏิสัมพันธ์ P-M, φPn,max ≥ Pu และ"
+                   f"ระยะเรียงเหล็กขวางผ่านเกณฑ์")
+    else:
+        fails = []
+        if not ratio_ok:
+            fails.append(f"ρg = {rho_g * 100:,.2f}% นอกช่วง 1–8%")
+        if not pm_ok:
+            fails.append("จุด (Mu, Pu) อยู่นอกเส้นออกแบบ P-M (เกินกำลัง)")
+        if not axial_ok:
+            fails.append(f"Pu = {Pu:,.0f} > φPn,max = {phiPn_max:,.0f} kgf")
+        if not spacing_ok:
+            fails.append("ระยะเรียงเหล็กขวางไม่ผ่านเกณฑ์")
+        st.error(f"{FAIL_TXT} — " + "; ".join(fails))
+
+    # ---- step-by-step derivation (existing table, collapsed) --------
+    with st.expander("รายละเอียดการคำนวณทีละขั้น (Detailed calculation)",
+                     expanded=False):
+        _sec_txt = (f"วงกลม Ø {D:,.1f} cm" if circular
+                    else f"สี่เหลี่ยม {b:,.1f} × {h:,.1f} cm")
+        st.markdown(
+            f"""
 | รายการ | ค่า |
 |---|---|
 | หน้าตัด | {_sec_txt} |
@@ -535,44 +646,12 @@ def _render_column():
 | ระยะเรียง{"เหล็กเกลียว (พิตช์)" if circular else "เหล็กปลอก"} ที่แนะนำ S | **≤ {S_req:,.1f} cm** |
 | เกณฑ์ระยะเรียง | {spacing_note} |
 """
-    )
+        )
 
-    # ------------------------------------------------------------------
-    # Result cards
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบ")
-    c_ratio, c_axial, c_pm, c_tie = st.columns(4)
-    with c_ratio:
-        st.markdown("#### อัตราส่วนเหล็ก ρg")
-        st.metric("ρg (1–8%)", f"{rho_g * 100.0:,.2f} %")
-        (st.success if ratio_ok else st.error)(
-            (PASS_TXT if ratio_ok else FAIL_TXT) + " — ρg")
-        if not ratio_ok:
-            side = "ต่ำกว่า 1%" if rho_g < RHO_MIN else "เกิน 8%"
-            st.warning(f"ρg {side} — ปรับจำนวน/ขนาดเหล็ก หรือขนาดหน้าตัด")
-    with c_axial:
-        st.markdown("#### แรงตามแนวแกน")
-        st.metric("φPn,max / Pu (kgf)", f"{phiPn_max:,.0f} / {Pu:,.0f}",
-                  delta=f"{phiPn_max - Pu:,.0f}")
-        (st.success if axial_ok else st.error)(
-            (PASS_TXT if axial_ok else FAIL_TXT) + " — φPn,max ≥ Pu")
-    with c_pm:
-        st.markdown("#### ปฏิสัมพันธ์ P-M")
-        st.metric("φMn @ Pu / Mu (kgf-m)",
-                  f"{phiMn_at_Pu:,.0f} / {Mu:,.0f}")
-        (st.success if pm_ok else st.error)(
-            (PASS_TXT if pm_ok else FAIL_TXT) + " — (Mu, Pu) ในเส้นออกแบบ")
-    with c_tie:
-        st.markdown("#### ระยะเรียง" + ("เหล็กเกลียว" if circular else "เหล็กปลอก"))
-        st.metric("S ที่แนะนำ (cm)", f"≤ {S_req:,.1f}")
-        (st.success if spacing_ok else st.error)(
-            (PASS_TXT if spacing_ok else FAIL_TXT) + " — ระยะเรียง")
-        if circular and not spacing_ok:
-            st.warning("พิตช์ที่ต้องใช้ < 2.5 cm — เพิ่มขนาดเหล็กเกลียว")
-
-    # ------------------------------------------------------------------
-    # CAD-style cross-section drawing
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # DRAWING / DETAIL  (drawing engine + geometry unchanged)
+    # ==================================================================
+    st.markdown("#### DRAWING / DETAIL — รายละเอียดหน้าตัดเสา")
     section_img = None
     try:
         fig = draw_column_detail(
@@ -587,9 +666,10 @@ def _render_column():
     except Exception as exc:  # pragma: no cover
         st.warning(f"ไม่สามารถสร้างภาพหน้าตัดได้: {exc}")
 
-    # ------------------------------------------------------------------
-    # P-M interaction diagram
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # INTERACTION / CAPACITY DIAGRAM  (curve data + plotting unchanged)
+    # ==================================================================
+    st.markdown("#### INTERACTION / CAPACITY DIAGRAM — แผนภาพ P-M")
     pm_img = None
     try:
         pm_fig = draw_pm_diagram(Mn_c, Pn_c, phiMn_c, phiPn_c, Mu, Pu)
@@ -600,25 +680,10 @@ def _render_column():
         st.warning(f"ไม่สามารถสร้างแผนภาพ P-M ได้: {exc}")
 
     # ------------------------------------------------------------------
-    # Overall verdict
-    # ------------------------------------------------------------------
-    st.subheader("ผลการตรวจสอบรวม")
-    if passed:
-        st.success(f"{PASS_TXT} — ρg, ปฏิสัมพันธ์ P-M, φPn,max ≥ Pu และ"
-                   f"ระยะเรียงเหล็กขวางผ่านเกณฑ์")
-    else:
-        fails = []
-        if not ratio_ok:
-            fails.append(f"ρg = {rho_g * 100:,.2f}% นอกช่วง 1–8%")
-        if not pm_ok:
-            fails.append("จุด (Mu, Pu) อยู่นอกเส้นออกแบบ P-M (เกินกำลัง)")
-        if not axial_ok:
-            fails.append(f"Pu = {Pu:,.0f} > φPn,max = {phiPn_max:,.0f} kgf")
-        if not spacing_ok:
-            fails.append("ระยะเรียงเหล็กขวางไม่ผ่านเกณฑ์")
-        st.error(f"{FAIL_TXT} — " + "; ".join(fails))
-
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # OUTPUT / REPORT  (report engine unchanged)
+    # ==================================================================
+    st.markdown("#### OUTPUT / REPORT — รายงานการคำนวณ")
     _sec_lbl = (f"วงกลม Ø {D:,.1f} cm" if circular
                 else f"สี่เหลี่ยม {b:,.1f} × {h:,.1f} cm")
     render_report_expander(
@@ -636,18 +701,7 @@ def _render_column():
             ("พื้นที่หน้าตัดรวม Ag", Ag, "cm²", 1),
             ("พื้นที่เหล็กเสริม Ast", Ast, "cm²", 2),
         ],
-        checks=[
-            ("อัตราส่วนเหล็ก ρg (1–8%)", f"{rho_g * 100:,.2f} %",
-             "1.00 – 8.00 %", ratio_ok),
-            ("ปฏิสัมพันธ์ P-M — (Mu, Pu) ในเส้นออกแบบ",
-             f"Mu = {Mu:,.0f} kgf-m", f"φMn ≈ {phiMn_at_Pu:,.0f} kgf-m", pm_ok),
-            ("กำลังตามแนวแกน (φPn,max ≥ Pu)", f"{Pu:,.0f} kgf",
-             f"{phiPn_max:,.0f} kgf", axial_ok),
-            (("ระยะพิตช์เหล็กเกลียว" if circular else "ระยะเรียงเหล็กปลอก"),
-             f"S ≤ {S_req:,.1f} cm",
-             f"{'พิตช์ 2.5–7.5 cm' if circular else f'≤ {least_dim:,.0f} cm'}",
-             spacing_ok),
-        ],
+        checks=checks,
         figures=[
             ("รายละเอียดหน้าตัดเสา (Column Cross-Section)", section_img),
             ("แผนภาพปฏิสัมพันธ์ P-M (P-M Interaction Diagram)", pm_img),

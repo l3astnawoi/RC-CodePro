@@ -1,0 +1,226 @@
+[
+  {
+    "case_id": "EV-ANLZ-001",
+    "module": "utils/analysis.py :: solve_continuous_beam",
+    "category": "continuous-beam analysis",
+    "description": "single simply-supported span, uniform load w on every span.",
+    "inputs": {
+      "spans_m": [
+        6.0
+      ],
+      "w_kgf_per_m": 1000.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "Structural analysis",
+      "section": "Clapeyron three-moment theorem + statics",
+      "equation": "M_{i-1}La + 2Mi(La+Lb) + M_{i+1}Lb = -(w La^3/4 + w Lb^3/4)"
+    },
+    "expected": {
+      "reactions_kgf": [
+        3000.0,
+        3000.0
+      ],
+      "support_moments_kgfm": [
+        0.0,
+        0.0
+      ],
+      "Mu_pos_kgfm": 4500.0,
+      "Mu_neg_kgfm": 0.0,
+      "Vu_kgf": 3000.0
+    },
+    "intermediate": {
+      "Mu_pos_on_analytic_grid_200pt": 4499.886366505896,
+      "method_note": "Three-moment is independent of the engine's direct-stiffness Euler-Bernoulli element assembly. EI cancels for prismatic members on non-settling supports, so reactions and internal forces are EI-independent."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "both methods are exact for this problem; the only gap on reactions / support moments is linear-solver round-off. Governing +Mu is compared with a SEPARATE, looser sampled-peak tolerance in EV-ANLZ-005 -- here Mu_pos uses the analytic peak and may legitimately differ from the engine's sampled value; see notes."
+    },
+    "notes": "For Mu_pos the engine returns a SAMPLED maximum (Finding VF-04). Compare engine Mu_pos against intermediate.Mu_pos_on_analytic_grid_200pt, not against the analytic peak, when judging solver correctness. EV-ANLZ-005 quantifies the sampling gap.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ANLZ-002",
+    "module": "utils/analysis.py :: solve_continuous_beam",
+    "category": "continuous-beam analysis",
+    "description": "two equal spans, uniform load w on every span.",
+    "inputs": {
+      "spans_m": [
+        6.0,
+        6.0
+      ],
+      "w_kgf_per_m": 1000.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "Structural analysis",
+      "section": "Clapeyron three-moment theorem + statics",
+      "equation": "M_{i-1}La + 2Mi(La+Lb) + M_{i+1}Lb = -(w La^3/4 + w Lb^3/4)"
+    },
+    "expected": {
+      "reactions_kgf": [
+        2250.0,
+        7500.0,
+        2250.0
+      ],
+      "support_moments_kgfm": [
+        0.0,
+        -4500.0,
+        0.0
+      ],
+      "Mu_pos_kgfm": 2531.25,
+      "Mu_neg_kgfm": 4500.0,
+      "Vu_kgf": 3750.0
+    },
+    "intermediate": {
+      "Mu_pos_on_analytic_grid_200pt": 2531.072447665463,
+      "method_note": "Three-moment is independent of the engine's direct-stiffness Euler-Bernoulli element assembly. EI cancels for prismatic members on non-settling supports, so reactions and internal forces are EI-independent."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "both methods are exact for this problem; the only gap on reactions / support moments is linear-solver round-off. Governing +Mu is compared with a SEPARATE, looser sampled-peak tolerance in EV-ANLZ-005 -- here Mu_pos uses the analytic peak and may legitimately differ from the engine's sampled value; see notes."
+    },
+    "notes": "For Mu_pos the engine returns a SAMPLED maximum (Finding VF-04). Compare engine Mu_pos against intermediate.Mu_pos_on_analytic_grid_200pt, not against the analytic peak, when judging solver correctness. EV-ANLZ-005 quantifies the sampling gap.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ANLZ-003",
+    "module": "utils/analysis.py :: solve_continuous_beam",
+    "category": "continuous-beam analysis",
+    "description": "two unequal spans, uniform load w on every span.",
+    "inputs": {
+      "spans_m": [
+        6.0,
+        4.0
+      ],
+      "w_kgf_per_m": 1000.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "Structural analysis",
+      "section": "Clapeyron three-moment theorem + statics",
+      "equation": "M_{i-1}La + 2Mi(La+Lb) + M_{i+1}Lb = -(w La^3/4 + w Lb^3/4)"
+    },
+    "expected": {
+      "reactions_kgf": [
+        2416.6666666666665,
+        6458.333333333334,
+        1125.0
+      ],
+      "support_moments_kgfm": [
+        0.0,
+        -3500.0,
+        0.0
+      ],
+      "Mu_pos_kgfm": 2920.138888888889,
+      "Mu_neg_kgfm": 3500.0,
+      "Vu_kgf": 3583.3333333333335
+    },
+    "intermediate": {
+      "Mu_pos_on_analytic_grid_200pt": 2920.1282795888987,
+      "method_note": "Three-moment is independent of the engine's direct-stiffness Euler-Bernoulli element assembly. EI cancels for prismatic members on non-settling supports, so reactions and internal forces are EI-independent."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "both methods are exact for this problem; the only gap on reactions / support moments is linear-solver round-off. Governing +Mu is compared with a SEPARATE, looser sampled-peak tolerance in EV-ANLZ-005 -- here Mu_pos uses the analytic peak and may legitimately differ from the engine's sampled value; see notes."
+    },
+    "notes": "For Mu_pos the engine returns a SAMPLED maximum (Finding VF-04). Compare engine Mu_pos against intermediate.Mu_pos_on_analytic_grid_200pt, not against the analytic peak, when judging solver correctness. EV-ANLZ-005 quantifies the sampling gap.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ANLZ-004",
+    "module": "utils/analysis.py :: solve_continuous_beam",
+    "category": "continuous-beam analysis",
+    "description": "three equal spans (symmetric), uniform load w on every span.",
+    "inputs": {
+      "spans_m": [
+        6.0,
+        6.0,
+        6.0
+      ],
+      "w_kgf_per_m": 1000.0
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "Structural analysis",
+      "section": "Clapeyron three-moment theorem + statics",
+      "equation": "M_{i-1}La + 2Mi(La+Lb) + M_{i+1}Lb = -(w La^3/4 + w Lb^3/4)"
+    },
+    "expected": {
+      "reactions_kgf": [
+        2400.0,
+        6600.0,
+        6600.0,
+        2400.0
+      ],
+      "support_moments_kgfm": [
+        0.0,
+        -3600.0,
+        -3600.0,
+        0.0
+      ],
+      "Mu_pos_kgfm": 2880.0,
+      "Mu_neg_kgfm": 3600.0,
+      "Vu_kgf": 3600.0
+    },
+    "intermediate": {
+      "Mu_pos_on_analytic_grid_200pt": 2879.109113406227,
+      "method_note": "Three-moment is independent of the engine's direct-stiffness Euler-Bernoulli element assembly. EI cancels for prismatic members on non-settling supports, so reactions and internal forces are EI-independent."
+    },
+    "tolerance": {
+      "type": "numerical",
+      "rel": 1e-06,
+      "abs": 0.001,
+      "rationale": "both methods are exact for this problem; the only gap on reactions / support moments is linear-solver round-off. Governing +Mu is compared with a SEPARATE, looser sampled-peak tolerance in EV-ANLZ-005 -- here Mu_pos uses the analytic peak and may legitimately differ from the engine's sampled value; see notes."
+    },
+    "notes": "For Mu_pos the engine returns a SAMPLED maximum (Finding VF-04). Compare engine Mu_pos against intermediate.Mu_pos_on_analytic_grid_200pt, not against the analytic peak, when judging solver correctness. EV-ANLZ-005 quantifies the sampling gap.",
+    "status": "REFERENCE_READY"
+  },
+  {
+    "case_id": "EV-ANLZ-005",
+    "module": "utils/analysis.py :: solve_continuous_beam (Mu_pos_kgfm sampling)",
+    "category": "numerical method (VF-04)",
+    "description": "Effect of fixed-grid sampling on the reported governing positive moment, single 6 m span.",
+    "inputs": {
+      "span_m": 6.0,
+      "w_kgf_per_m": 1000.0,
+      "grid_points": 200
+    },
+    "reference_method": "LEVEL_A",
+    "code_reference": {
+      "code": "Statics",
+      "section": "simply-supported UDL",
+      "equation": "M(x) = w x (L-x)/2 ; peak w L^2/8 at x = L/2"
+    },
+    "expected": {
+      "M_exact_kgfm": 4500.0,
+      "M_sampled_grid_peak_kgfm": 4499.886366505896,
+      "abs_diff_kgfm": 0.11363349410385126,
+      "rel_diff": 2.5251887578633613e-05
+    },
+    "intermediate": {
+      "L_m": 6.0,
+      "w_kgf_per_m": 1000.0,
+      "M_exact_kgfm": 4500.0,
+      "M_sampled_grid_peak_kgfm": 4499.886366505896,
+      "abs_diff_kgfm": 0.11363349410385126,
+      "rel_diff": 2.5251887578633613e-05,
+      "sampling_error_bound_kgfm": 0.11363349410368424,
+      "direction": "sampling UNDER-estimates the true peak"
+    },
+    "tolerance": {
+      "type": "engineering",
+      "value": "engine Mu_pos must match M_sampled_grid_peak within rel 1e-4 (confirms the ONLY error source is grid sampling, not the solver); and the exact-vs-sampled gap must stay within the parabola sampling bound (w/2)(h/2)^2 = 0.1136 kgf-m.",
+      "rationale": "VF-04 is a known non-conservative approximation; the acceptance is that it is BOUNDED and attributable to sampling, not that it is zero."
+    },
+    "notes": "Direction: sampling UNDER-estimates the peak (non-conservative) by ~0.0025 %. Recommend EV-03 either densify sampling near span interior stationary points or evaluate M there analytically. DO NOT change the solver in EV-02.",
+    "status": "REFERENCE_READY"
+  }
+]
