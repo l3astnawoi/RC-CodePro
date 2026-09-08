@@ -92,6 +92,8 @@ class PlanCanvas(QGraphicsView):
         self._drag_handle = None         # (grid_member, endpoint_index) while editing
         self._linked = []                # (grid, endpoint_index) that follow the drag
         self.current_level = None        # {'name', 'elev'} being drawn on, or None
+        self._pt_axis_override = None    # Tab-fixed offset axis for point placement
+        self._pt_target = None           # live (x, y) while hovering a point/line tool
         self.scale(0.55, 0.55)
         self.centerOn(200, 200)
 
@@ -104,6 +106,8 @@ class PlanCanvas(QGraphicsView):
         self._grid_ref = None
         self._grid_start = None
         self._axis_override = None
+        self._pt_axis_override = None
+        self._pt_target = None
         self._drag_handle = None
         self._linked = []
         self._band_origin = None
@@ -510,6 +514,8 @@ class PlanCanvas(QGraphicsView):
         self._grid_ref = None
         self._grid_start = None
         self._axis_override = None
+        self._pt_axis_override = None
+        self._pt_target = None
         self._drag_handle = None
         self._linked = []
         self._band_origin = None
@@ -615,16 +621,26 @@ class PlanCanvas(QGraphicsView):
             else:
                 self._commit_grid_segment(sp)
             return
-        x, y = self._snap_point(sp)
         if self.mode in POINT_KINDS:
+            x, y = self._pt_target if self._pt_target is not None else self._snap_point(sp)
             self.add_member(self.mode, [(x, y)])
+            self._type_buffer = ''
+            self._pt_target = None
+            self._clear_cursor()
         elif self.mode in LINE_KINDS:
+            if not self._pending:
+                x, y = self._pt_target if self._pt_target is not None else self._snap_point(sp)
+                self._type_buffer = ''
+                self._pt_target = None
+            else:
+                x, y = self._snap_point(sp)
             self._pending.append((x, y))
             if len(self._pending) == 2:
                 self.add_member(self.mode, self._pending)
                 self._pending = []
                 self._clear_cursor()
         else:
+            x, y = self._snap_point(sp)
             self._pending.append((x, y))
             self._draw_cursor_poly()
 
@@ -674,6 +690,9 @@ class PlanCanvas(QGraphicsView):
         elif self.mode in LINE_KINDS and len(self._pending) == 1:
             x, y = self._snap_point(sp)
             self._draw_cursor_line(self._pending[0], (x, y))
+        elif self.mode in POINT_KINDS or self.mode in LINE_KINDS:
+            self._last_cursor = sp
+            self._point_preview(sp)
         super().mouseMoveEvent(event)
 
     def _grid_axis_extent(self, axis):
@@ -770,11 +789,15 @@ class PlanCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def event(self, e):
-        # grab Tab before the focus system does, but only while drawing a grid
-        if (e.type() == QEvent.Type.KeyPress and e.key() == Qt.Key_Tab
-                and self.mode == 'grid'):
-            self.toggle_grid_axis()
-            return True
+        # grab Tab before the focus system does, while drawing a grid or
+        # while aiming a point/line member off a grid line
+        if e.type() == QEvent.Type.KeyPress and e.key() == Qt.Key_Tab:
+            if self.mode == 'grid':
+                self.toggle_grid_axis()
+                return True
+            if self.mode in POINT_KINDS or (self.mode in LINE_KINDS and not self._pending):
+                self._toggle_point_axis()
+                return True
         return super().event(e)
 
     def keyPressEvent(self, event):
@@ -782,6 +805,8 @@ class PlanCanvas(QGraphicsView):
             self._pending = []
             self._type_buffer = ''
             self._grid_start = None
+            self._pt_target = None
+            self._pt_axis_override = None
             self._clear_cursor()
             if self.mode != 'select':
                 self._exit_to_select()           # leave any create tool
@@ -798,6 +823,17 @@ class PlanCanvas(QGraphicsView):
                 self._grid_type_backspace(); event.accept(); return
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 self._grid_confirm_typed(); event.accept(); return
+        if self.mode in POINT_KINDS or (self.mode in LINE_KINDS and not self._pending):
+            if event.key() == Qt.Key_Tab:
+                self._toggle_point_axis(); event.accept(); return
+            t = event.text()
+            if t and (t.isdigit() or t == '.'):
+                self._point_type_key(t); event.accept(); return
+            if event.key() == Qt.Key_Backspace and self._type_buffer:
+                self._type_buffer = self._type_buffer[:-1]
+                self._refresh_point_preview(); event.accept(); return
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._point_confirm_typed(); event.accept(); return
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected()
         else:
@@ -907,6 +943,108 @@ class PlanCanvas(QGraphicsView):
         coord = (abs(val) * 100.0) if ref is None else (ref + direction * abs(val) * 100.0)
         self.add_grid(axis, coord)
         self._clear_cursor()
+
+    # ---- off-grid point / line placement -------------------------
+    def _nearest_grid(self, axis, value):
+        coords = self._grid_coords(axis)
+        if not coords:
+            return None
+        return min(coords, key=lambda c: abs(c - value))
+
+    def _resolve_point_axis(self, sp):
+        """Which offset a typed distance dials in: 'x' = distance from the
+        nearest vertical grid, 'y' = distance from the nearest horizontal
+        grid. Inferred from whichever offset is larger, unless Tab fixed it."""
+        if self._pt_axis_override in ('x', 'y'):
+            return self._pt_axis_override
+        nv = self._nearest_grid('v', sp.x())
+        nh = self._nearest_grid('h', sp.y())
+        if nv is None:
+            return 'y' if nh is not None else 'x'
+        if nh is None:
+            return 'x'
+        return 'x' if abs(sp.x() - nv) >= abs(sp.y() - nh) else 'y'
+
+    def _toggle_point_axis(self):
+        cur = self._resolve_point_axis(self._last_cursor or QPointF(0.0, 0.0))
+        self._pt_axis_override = 'y' if cur == 'x' else 'x'
+        self._refresh_point_preview()
+
+    def _point_type_key(self, ch):
+        if ch.isdigit() or (ch == '.' and '.' not in self._type_buffer):
+            self._type_buffer += ch
+            self._refresh_point_preview()
+
+    def _refresh_point_preview(self):
+        if self.mode in POINT_KINDS or (self.mode in LINE_KINDS and not self._pending):
+            sp = self._last_cursor if self._last_cursor is not None else QPointF(0.0, 0.0)
+            self._point_preview(sp)
+
+    def _point_preview(self, sp):
+        self._clear_cursor()
+        nv = self._nearest_grid('v', sp.x())
+        nh = self._nearest_grid('h', sp.y())
+        active = self._resolve_point_axis(sp)
+        typed = _num(self._type_buffer)
+        if typed is None:
+            x, y = self._snap_point(sp)
+        else:
+            if active == 'x' and nv is not None:
+                x = nv + (1.0 if sp.x() >= nv else -1.0) * abs(typed) * 100.0
+            else:
+                x = self._snap_coord(sp.x(), 'v')
+            if active == 'y' and nh is not None:
+                y = nh + (1.0 if sp.y() >= nh else -1.0) * abs(typed) * 100.0
+            else:
+                y = self._snap_coord(sp.y(), 'h')
+        self._pt_target = (float(x), float(y))
+        self._draw_cross(x, y)
+        strong = active if typed is not None else None
+        if nv is not None and abs(x - nv) > 1e-6:
+            self._draw_measure((nv, y), (x, y), horizontal=True, strong=(strong == 'x'))
+        if nh is not None and abs(y - nh) > 1e-6:
+            self._draw_measure((x, nh), (x, y), horizontal=False, strong=(strong == 'y'))
+        if self._type_buffer:
+            self._draw_type_hint(x, y)
+
+    def _draw_measure(self, p1, p2, *, horizontal, strong):
+        col = QColor('#db2777' if strong else '#f472b6')
+        ln = QGraphicsLineItem(QLineF(p1[0], p1[1], p2[0], p2[1]))
+        pen = QPen(col, 0); pen.setStyle(Qt.DashLine)
+        ln.setPen(pen); ln.setZValue(9)
+        self._scene.addItem(ln); self._cursor_items.append(ln)
+        for (px, py) in (p1, p2):
+            t = QGraphicsLineItem(px - 6, py - 6, px + 6, py + 6)
+            t.setPen(QPen(col, 0)); t.setZValue(9)
+            self._scene.addItem(t); self._cursor_items.append(t)
+        dist = ((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2) ** 0.5 / 100.0
+        txt = QGraphicsSimpleTextItem(f"{dist:.2f}")
+        f = QFont(); f.setPointSizeF(19); f.setBold(bool(strong)); txt.setFont(f)
+        txt.setBrush(QBrush(col))
+        txt.setTransform(txt.transform().scale(1, -1))
+        mx, my = (p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0
+        tb = txt.boundingRect()
+        if horizontal:
+            txt.setPos(mx - tb.width() / 2.0, my + tb.height() + 10)
+        else:
+            txt.setPos(mx + 14, my + tb.height() / 2.0)
+        txt.setZValue(10); self._scene.addItem(txt); self._cursor_items.append(txt)
+
+    def _point_confirm_typed(self):
+        sp = self._last_cursor if self._last_cursor is not None else QPointF(0.0, 0.0)
+        self._point_preview(sp)                 # fold the typed buffer into _pt_target
+        target = self._pt_target
+        self._type_buffer = ''
+        self._pt_target = None
+        if target is None:
+            self._clear_cursor()
+            return
+        if self.mode in POINT_KINDS:
+            self.add_member(self.mode, [target])
+            self._clear_cursor()
+        elif self.mode in LINE_KINDS and not self._pending:
+            self._pending.append(target)
+            self._clear_cursor()
 
     def _member_at(self, sp):
         best, best_d = None, _SNAP_PICK_CM * 2

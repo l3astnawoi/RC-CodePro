@@ -458,3 +458,26 @@ Run development shell: `python run_desktop.py`.
   block the new unsigned binary with "Application Control policy has blocked
   this file" until Microsoft ISG grants the hash reputation — retry the
   packaged smoke after a few minutes if that happens.
+
+### Off-grid point / line placement — hover dimension + typed offset — 2026-09-08
+
+- Column, footing, beam and stair tools now show a live **offset dimension**
+  while aiming (before the first click): a dashed measure from the nearest
+  vertical grid to the cursor (X offset) and from the nearest horizontal grid
+  (Y offset), each with its distance in metres.
+- Typing a distance (digits / `.`) then **Enter** drops the point exactly that
+  far from the reference grid on the active axis; the other axis stays on its
+  nearest grid line. **Tab** flips which axis the typed number applies to
+  (`_pt_axis_override`), mirroring the grid tool. `event()` grabs Tab in these
+  modes too.
+- The active axis is inferred from whichever offset is larger
+  (`_resolve_point_axis`). With no grid lines present the tools fall back to
+  the ordinary snapped cursor position — no crash, no reference.
+- A plain click with an empty type buffer is unchanged (`_snap_point`,
+  including the background-grid snap). `_pt_target` from the live preview is
+  what both click and Enter commit.
+- New helpers in `plan_canvas.py`: `_nearest_grid`, `_resolve_point_axis`,
+  `_toggle_point_axis`, `_point_type_key`, `_refresh_point_preview`,
+  `_point_preview`, `_draw_measure`, `_point_confirm_typed`.
+- 62 building tests (7 new for this feature) + 93 desktop tests pass; source
+  smoke exit 0. EXE not rebuilt this round.

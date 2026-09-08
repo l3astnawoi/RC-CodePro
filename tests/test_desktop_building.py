@@ -742,3 +742,101 @@ def test_dimension_offset_tracks_grid_extent_after_length_edit():
     assert new_flo <= -300.0                                 # framework extended down
     assert abs(new_gap - chain_gap) < 1e-6                   # dim keeps its offset
     page.close()
+
+
+# --- off-grid point/line placement: hover dimension + typed offset --------
+def _gridded_page(tool):
+    page = blank_page()
+    page.canvas.add_grid('v', 0.0, emit=False)               # grid A
+    page.canvas.add_grid('h', 0.0, emit=False)               # grid 1
+    page._select_tool(tool)
+    return page
+
+
+def _cursor_texts(canvas):
+    return [it.text() for it in canvas._cursor_items if hasattr(it, 'text')]
+
+
+def test_column_hover_shows_offset_dimension_from_nearest_grid():
+    _app()
+    page = _gridded_page('column')
+    page.canvas._point_preview(QPointF(300.0, 40.0))          # 3.00 m east of grid A
+    assert page.canvas._cursor_items                          # a preview is drawn
+    assert '3.00' in _cursor_texts(page.canvas)
+    assert len(page.canvas.members) == 2                      # only the two grids
+    page.close()
+
+
+def test_footing_hover_shows_offset_dimension():
+    _app()
+    page = _gridded_page('footing')
+    page.canvas._point_preview(QPointF(0.0, 300.0))           # 3.00 m north of grid 1
+    assert '3.00' in _cursor_texts(page.canvas)
+    page.close()
+
+
+def test_typed_offset_places_column_off_grid():
+    _app()
+    page = _gridded_page('column')
+    page.canvas._last_cursor = QPointF(250.0, 5.0)            # aim east, near grid 1
+    page.canvas._type_buffer = '1.2'
+    page.canvas._point_confirm_typed()
+    cols = [m for m in page.canvas.members if m['kind'] == 'column']
+    assert len(cols) == 1
+    assert cols[0]['points'] == [(120.0, 0.0)]               # 1.20 m from A, on grid 1
+    assert page.canvas._type_buffer == ''
+    page.close()
+
+
+def test_tab_flips_typed_offset_axis_for_points():
+    _app()
+    page = _gridded_page('column')
+    page.canvas._last_cursor = QPointF(250.0, 400.0)          # y offset is the larger
+    assert page.canvas._resolve_point_axis(page.canvas._last_cursor) == 'y'
+    page.canvas._toggle_point_axis()
+    assert page.canvas._pt_axis_override == 'x'
+    page.canvas._type_buffer = '2'
+    page.canvas._point_confirm_typed()
+    col = [m for m in page.canvas.members if m['kind'] == 'column'][0]
+    assert col['points'][0][0] == 200.0                       # 2.00 m east of grid A
+    page.close()
+
+
+def test_beam_first_point_accepts_typed_offset():
+    _app()
+    page = _gridded_page('beam')
+    page.canvas._last_cursor = QPointF(180.0, 8.0)
+    page.canvas._type_buffer = '1'
+    page.canvas._point_confirm_typed()
+    assert page.canvas._pending == [(100.0, 0.0)]             # first end staged, no member
+    assert not [m for m in page.canvas.members if m['kind'] == 'beam']
+    page.close()
+
+
+def test_typed_offset_without_grids_falls_back_to_cursor():
+    _app()
+    page = blank_page()                                       # no grid lines at all
+    page._select_tool('column')
+    page.canvas._last_cursor = QPointF(150.0, 150.0)
+    page.canvas._type_buffer = '2'
+    page.canvas._point_confirm_typed()                        # must not raise
+    cols = [m for m in page.canvas.members if m['kind'] == 'column']
+    assert len(cols) == 1 and cols[0]['points'] == [(150.0, 150.0)]
+    page.close()
+
+
+def test_escape_clears_typed_point_offset_state():
+    _app()
+    page = _gridded_page('column')
+    page.canvas._last_cursor = QPointF(250.0, 5.0)
+    page.canvas._type_buffer = '3'
+    page.canvas._pt_axis_override = 'x'
+    page.canvas._point_preview(page.canvas._last_cursor)
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    ev = QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    page.canvas.keyPressEvent(ev)
+    assert page.canvas._type_buffer == ''
+    assert page.canvas._pt_target is None
+    assert page.canvas._pt_axis_override is None
+    page.close()

@@ -314,6 +314,9 @@ class BuildingPage(QWidget):
                     'stair': 'คลิก 2 จุดเพื่อวางแนวบันได',
                     'slab': 'คลิกหลายจุด แล้วดับเบิลคลิกเพื่อปิดรูปพื้น'}[key]
             v.addWidget(QLabel(hint))
+            if key in ('column', 'footing', 'beam', 'stair'):
+                v.addWidget(QLabel('ระหว่างเล็ง (ยังไม่คลิก) จะมีเส้นบอกระยะจากกริดที่ใกล้ที่สุด\n'
+                                   'พิมพ์ระยะ (m) + Enter เพื่อวางห่างจากกริดเป๊ะ ๆ · Tab สลับแกน X/Y'))
             picker = QComboBox()
             picker.currentIndexChanged.connect(lambda _=0, k=key: self._on_pick_section(k))
             self._pickers[key] = picker
