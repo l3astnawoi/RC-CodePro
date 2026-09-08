@@ -56,3 +56,6 @@ NUL
 
 # Claude Code local dev tooling
 .claude/
+
+# Vendored packaged-build dependencies (PySide6 / PyInstaller)
+desktop_vendor/
