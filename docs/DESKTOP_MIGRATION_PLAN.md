@@ -481,3 +481,54 @@ Run development shell: `python run_desktop.py`.
   `_point_preview`, `_draw_measure`, `_point_confirm_typed`.
 - 62 building tests (7 new for this feature) + 93 desktop tests pass; source
   smoke exit 0. EXE not rebuilt this round.
+
+### Home dashboard redesign — real data, no demo rows — 2026-09-12
+
+User feedback was a screenshot of a proposed marketing-style dashboard
+(search bar, notifications, language toggle, avatar, a left-nav wizard shell
+`Project→Building→Model→Properties→Loads→Analysis→Results→Design→
+Reinforcement→Detailing→Export`, a workflow stepper). The app's actual shell
+is a ribbon + project-tree + inspector CAD layout, and most of those pages
+don't exist, so that part was scoped down with the user (kept the ribbon
+shell; skipped search/notifications/language/avatar — no real backing
+system for any of them). What shipped, against the real app, no fabricated
+data:
+
+- **Title**: "Welcome Start Screen Dashboard" → "Welcome to RC Code Pro";
+  subtitle is the real project name + `ACI 318M-19 · Metric (cm · kg)`.
+- **Sidebar**: the two 110px NEW/OPEN buttons shrank to normal size; added
+  real links (Recent → scrolls to the section, Settings → Parameters page)
+  instead of leaving the space empty.
+- **Recent Projects is real**: new `desktop_app/recent_files.py`, a tiny
+  QSettings-backed MRU list (`RCCodePro`/`Desktop`, key `recent_projects`,
+  max 8, pruned to files that still exist). `BuildingPage.save_model`,
+  `save_model_as` and the new `open_model_path(path)` (used by both File>Open
+  and Home) call `recent_files.add`. `RecentProjectCard` gained a ⋮ menu
+  (open / show in folder via `QDesktopServices` / remove from the list) and
+  click-anywhere-to-open; empty state is an honest message, not 3 hard-coded
+  rows. Per-project 3D thumbnails need a render pipeline — out of scope,
+  all cards still share one generic preview image.
+- **Continue Designing hero**: new `HeroCard` widget — Building Model is one
+  big card with a "เริ่ม Building Model →" button; the other six categories
+  render as the standalone-tool row below it (kept the 4-column wrap from
+  before — 6 cards in one row overflowed the default window width).
+- **Project Overview panel**: new `BuildingPage.overview_data()` reads real
+  element counts (grouped by kind, grids excluded), level count, and
+  analysis status off `self.result`; Home shows it in a `QStackedWidget`
+  alongside a Getting Started checklist shown instead when the canvas has no
+  members yet.
+- `HomePage` now takes `on_open_file`, `get_project`, `get_building` (lazy
+  callables — Home is built before BuildingPage exists) and a `refresh()`
+  method called from `DesktopWindow.go()` on every navigation to Home.
+- Fixed a latent widget-lifetime bug found while testing: `_refresh_recent`
+  was clearing the grid with `deleteLater()` alone, which leaves the old
+  cards as live children (still found by `findChildren`) until the event
+  loop processes the deferred delete; now `setParent(None)` first.
+- `tests/test_desktop_workbench.py` rewritten for the new layout (asserts
+  `HeroCard`×1 + `CategoryCard`×6, and exercises both the empty and
+  populated Recent Projects states via a monkeypatched `recent_files.load`).
+  `run_desktop.py`'s smoke test updated to match. 117 desktop tests pass —
+  the 3 remaining `test_desktop_footing.py::test_reference` failures are a
+  pre-existing, unrelated `build_report()` signature mismatch (confirmed via
+  `git stash`), flagged as a separate follow-up task, not fixed here.
+- EXE not rebuilt this round.
